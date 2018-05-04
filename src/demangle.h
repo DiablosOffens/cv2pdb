@@ -8,5 +8,7 @@
 #define __DEMANGLE_H__
 
 bool d_demangle(const char* name, char* demangled, int maxlen, bool plain);
+bool cpp_demangle(const char* name, char* demangled, int maxlen, bool plain);
+bool cpp_ismangled_ctor_dtor_or_conversion(const char* name, bool& ctor, bool& dtor, bool& conversion);
 
 #endif //__DEMANGLE_H__

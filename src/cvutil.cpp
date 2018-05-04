@@ -69,7 +69,8 @@ int getStructFieldlist(const codeview_type* cvtype)
 
 const BYTE* getStructName(const codeview_type* cvtype, bool &cstr)
 {
-	int value, leaf_len;
+	int leaf_len;
+	long long value;
 	switch (cvtype->generic.id)
 	{
 	case LF_STRUCTURE_V1:
@@ -107,7 +108,7 @@ bool isCompleteStruct(const codeview_type* type, const BYTE* name, bool cstr)
 		&& cmpStructName(type, name, cstr);
 }
 
-int numeric_leaf(int* value, const void* leaf)
+int numeric_leaf(long long* value, const void* leaf)
 {
 	unsigned short int type = *(const unsigned short int*) leaf;
 	leaf = (const unsigned short int*) leaf + 1;
@@ -132,14 +133,22 @@ int numeric_leaf(int* value, const void* leaf)
 		break;
 
 	case LF_LONG:
+		length += 4;
+		*value = *(const long*)leaf;
+		break;
+
 	case LF_ULONG:
 		length += 4;
-		*value = *(const int*)leaf;
+		*value = *(const unsigned long*)leaf;
+		break;
+
+	case LF_QUADWORD:
+	case LF_UQUADWORD:
+		length += 8;
+		*value = *(const long long *)leaf;
 		break;
 
 	case LF_COMPLEX64:
-	case LF_QUADWORD:
-	case LF_UQUADWORD:
 	case LF_REAL64:
 		length += 8;
 		break;
@@ -179,35 +188,47 @@ int numeric_leaf(int* value, const void* leaf)
 	return length;
 }
 
-int write_numeric_leaf(int value, void* leaf)
+int write_numeric_leaf(long long value, void* leaf)
 {
-	if(value >= 0 && value < LF_NUMERIC)
+	if (value >= 0 && value < LF_NUMERIC)
 	{
-		*(unsigned short int*) leaf = (unsigned short) value;
+		*(unsigned short int*) leaf = (unsigned short)value;
 		return 2;
 	}
 	unsigned short int* type = (unsigned short int*) leaf;
 	leaf = type + 1;
-	if (value >= -128 && value <= 127)
+	if (value >= SCHAR_MIN && value <= SCHAR_MAX)
 	{
 		*type = LF_CHAR;
-		*(char*) leaf = (char)value;
+		*(char*)leaf = (char)value;
 		return 3;
 	}
-	if (value >= -32768 && value <= 32767)
+	if (value >= SHRT_MIN && value <= SHRT_MAX)
 	{
 		*type = LF_SHORT;
-		*(short*) leaf = (short)value;
+		*(short*)leaf = (short)value;
 		return 4;
 	}
-	if (value >= 0 && value <= 65535)
+	if (value >= 0 && value <= USHRT_MAX)
 	{
 		*type = LF_USHORT;
-		*(unsigned short*) leaf = (unsigned short)value;
+		*(unsigned short*)leaf = (unsigned short)value;
 		return 4;
 	}
-	*type = LF_LONG;
-	*(long*) leaf = (long)value;
-	return 6;
+	if (value >= LONG_MIN && value <= LONG_MAX)
+	{
+		*type = LF_LONG;
+		*(long*)leaf = (long)value;
+		return 6;
+	}
+	if (value >= 0 && value <= ULONG_MAX)
+	{
+		*type = LF_ULONG;
+		*(unsigned long*)leaf = (unsigned long)value;
+		return 6;
+	}
+	*type = LF_QUADWORD;
+	*(long long*)leaf = value;
+	return 10;
 }
 

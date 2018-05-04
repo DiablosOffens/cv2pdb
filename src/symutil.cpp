@@ -1,4 +1,4 @@
-// Convert DMD CodeView debug information to PDB files
+﻿// Convert DMD CodeView debug information to PDB files
 // Copyright (c) 2009-2010 by Rainer Schuetze, All Rights Reserved
 //
 // License for redistribution is given by the Artistic License 2.0
@@ -15,20 +15,22 @@ extern "C" {
 
 #include <assert.h>
 
-char dotReplacementChar = '@';
+//utf-8 encoded
+char dotReplacementChar[4] = u8"@";
+size_t cbDotReplacementChar = 1;
 bool demangleSymbols = true;
 bool useTypedefEnum = false;
 
 int dsym2c(const BYTE* p, int len, char* cname, int maxclen)
 {
 	const BYTE* end = p + len;
-	int zlen, zpos, cpos = 0;
+	int zlen, zpos, cpos = 0, rpos;
 
 	// decompress symbol
 	while (p < end)
 	{
 		int ch = *p++;
-		if(ch == 0)
+		if (ch == 0)
 			break;
 		if ((ch & 0xc0) == 0xc0)
 		{
@@ -56,7 +58,7 @@ int dsym2c(const BYTE* p, int len, char* cname, int maxclen)
 				break;
 			if (cpos + zlen >= maxclen)
 				break;
-			for(int z = 0; z < zlen; z++)
+			for (int z = 0; z < zlen; z++)
 				cname[cpos + z] = cname[cpos - zpos + z];
 			cpos += zlen;
 		}
@@ -71,15 +73,15 @@ int dsym2c(const BYTE* p, int len, char* cname, int maxclen)
 			zpos = *p++ & 0x7f;
 			if (zpos > cpos)
 				break;
-			for(int z = 0; z < zlen; z++)
+			for (int z = 0; z < zlen; z++)
 				cname[cpos + z] = cname[cpos - zpos + z];
 			cpos += zlen;
-		} 
+		}
 		else if (ch > 0x80)
 		{
 			zlen = (ch & 0x7) + 1;
 			zpos = ((ch >> 3) & 0xf) - 7; // + zlen;
-			for(int z = 0; z < zlen; z++)
+			for (int z = 0; z < zlen; z++)
 				cname[cpos + z] = cname[cpos - zpos + z];
 			cpos += zlen;
 		}
@@ -89,17 +91,42 @@ int dsym2c(const BYTE* p, int len, char* cname, int maxclen)
 	}
 
 	cname[cpos] = 0;
-	if(demangleSymbols)
+	if (demangleSymbols)
 		if (cname[0] == '_' && cname[1] == 'D' && isdigit(cname[2]))
 			d_demangle(cname, cname, maxclen, true);
 
 #if 1
-	for(int i = 0; i < cpos; i++)
+	static char replcname[kMaxNameLen];
+	const int insertlen = cbDotReplacementChar - 1;
+	rpos = 0;
+	for (int i = 0; i < cpos && rpos < kMaxNameLen; i++, rpos++)
 		if (cname[i] == '.')
-			cname[i] = dotReplacementChar;
+		{
+			replcname[rpos] = dotReplacementChar[0];
+			for (int m = 0; m < insertlen; m++)
+				replcname[++rpos] = dotReplacementChar[1 + m];
+		}
+		else
+			replcname[rpos] = cname[i];
+	memcpy(cname, replcname, rpos);
+	cpos = rpos;
 #endif
 
 	return cpos;
+}
+
+static void write_pstrlen(BYTE* &p, int len)
+{
+	if (len > 255)
+	{
+		assert(len <= USHRT_MAX);
+		*p++ = 0xff;
+		*p++ = 0;
+		*p++ = len & 0xff;
+		*p++ = len >> 8;
+	}
+	else
+		*p++ = len;
 }
 
 int pstrlen(const BYTE* &p)
@@ -150,15 +177,7 @@ int c2p(const char* c, BYTE* p)
 {
 	BYTE* q = p;
 	int len = strlen(c);
-	if(len > 255)
-	{
-		*p++ = 0xff;
-		*p++ = 0;
-		*p++ = len & 0xff;
-		*p++ = len >> 8;
-	}
-	else
-		*p++ = len;
+	write_pstrlen(p, len);
 	memcpy(p, c, len);
 	return p + len - q;
 }
@@ -179,19 +198,29 @@ int p2ccpy(char* p, const BYTE* s)
 int pstrcpy(BYTE* p, const BYTE* s)
 {
 	const BYTE* src = s;
+	const BYTE* dest = p;
 	int len = pstrlen(s);
-	for(int i = 0; i <= s - src; i++)
-		*p++ = src[i];
+	int replen = len;
+	const int insertlen = cbDotReplacementChar - 1;
+	if (insertlen != 0)
+	{
+		for (int i = 0; i < len; i++)
+			if (s[i] == '.')
+				replen += insertlen;
+	}
+	write_pstrlen(p, replen);
 
-	for(int i = 0; i < len; i++)
+	for (int i = 0, k = 0; i < len && k < replen; i++, k++)
 		if (s[i] == '.')
 		{
 			//p[i++] = ':';
-			p[i] = dotReplacementChar;
+			p[k] = dotReplacementChar[0];
+			for (int m = 0; m < insertlen; m++)
+				p[++k] = dotReplacementChar[1 + m];
 		}
 		else
-			p[i] = s[i];
-	return len + src - s; // *(BYTE*) memcpy (p, s, *s + 1) + 1;
+			p[k] = s[i];
+	return replen + (p - dest); // *(BYTE*) memcpy (p, s, *s + 1) + 1;
 }
 
 int dmemcmp(const void* v1, const void* v2, int len)
@@ -202,10 +231,12 @@ int dmemcmp(const void* v1, const void* v2, int len)
 	{
 		int b1 = p1[i];
 		int b2 = p2[i];
+		// in utf8 ASCII->ASCII; all others start with escape sequence which is greater than 7 bit
+		// so first byte is sufficient
 		if(b1 == '.')
-			b1 = dotReplacementChar;
+			b1 = dotReplacementChar[0];
 		if(b2 == '.')
-			b2 = dotReplacementChar;
+			b2 = dotReplacementChar[0];
 		if(b1 != b2)
 			return b2 - b1;
 	}
@@ -260,23 +291,44 @@ int pstrcpy_v(bool v3, BYTE* d, const BYTE* s)
 	return clen;
 }
 
-int cstrcpy_v(bool v3, BYTE* d, const char* s)
+int cstrcpy_v(bool v3, BYTE* d, const char* s, bool replacedot)
 {
+	BYTE* dest = d;
 	int len = strlen(s);
-	if(!v3)
+	len = (std::min)(len, kMaxNameLen - 1);
+	int replen = len;
+	const int insertlen = cbDotReplacementChar - 1;
+	if (replacedot)
 	{
-		assert(len < 256);
-		*d++ = len;
+		if (insertlen > 0)
+		{
+			for (int i = 0; i < len; i++)
+				if (s[i] == '.')
+					replen += insertlen;
+		}
+		replen = (std::min)(replen, kMaxNameLen - 1);
 	}
-	len = (std::min)(len, kMaxNameLen-1);
 
-	memcpy(d, s, len + 1);
-	d[len] = '\0';
+	if (!v3)
+		write_pstrlen(d, replen);
+	else
+		d[replen] = '\0';
 
-	for(int i = 0; i < len; i++)
-		if (d[i] == '.')
-			d[i] = dotReplacementChar;
+	if (!replacedot)
+		memcpy(d, s, len + 1);
+	else
+	{
+		for (int i = 0, k = 0; i < len && k < replen; i++, k++)
+			if (s[i] == '.')
+			{
+				d[k] = dotReplacementChar[0];
+				for (int m = 0; m < insertlen; m++)
+					d[++k] = dotReplacementChar[1 + m];
+			}
+			else
+				d[k] = s[i];
+	}
 
-	return len + 1;
+	return !v3 ? replen + (d - dest) : replen + 1;
 }
 

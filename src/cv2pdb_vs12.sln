@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 2013
-VisualStudioVersion = 12.0.30501.0
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{7F4A9B6A-05A2-45D0-AFC3-3754B7FB77B9}"
 	ProjectSection(SolutionItems) = preProject
@@ -18,6 +18,9 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "cv2pdb", "cv2pdb.vcxproj", "{5E2BD27D-446A-4C99-9829-135F7C000D90}"
+	ProjectSection(ProjectDependencies) = postProject
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4} = {44A12FD3-3340-4F53-8437-81AF5D0741C4}
+	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dviewhelper", "dviewhelper\dviewhelper.vcxproj", "{E4424774-A7A0-4502-8626-2723904D70EA}"
 EndProject
@@ -26,6 +29,8 @@ EndProject
 Project("{002A2DE9-8BB6-484D-9802-7E4AD4084715}") = "test", "..\test\test.visualdproj", "{370E7494-D0CB-450F-B74A-4CEEDB19FBAE}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "dumplines", "dumplines.vcxproj", "{6434537D-446A-4C99-9829-135F7C000D90}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libiberty", "..\libiberty\libiberty.vcxproj", "{44A12FD3-3340-4F53-8437-81AF5D0741C4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -105,6 +110,22 @@ Global
 		{6434537D-446A-4C99-9829-135F7C000D90}.Win32 COFF|Win32.ActiveCfg = Release|Win32
 		{6434537D-446A-4C99-9829-135F7C000D90}.Win32 COFF|Win32.Build.0 = Release|Win32
 		{6434537D-446A-4C99-9829-135F7C000D90}.Win32 COFF|x64.ActiveCfg = Release|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug GDC|Win32.ActiveCfg = Debug|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug GDC|Win32.Build.0 = Debug|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug GDC|x64.ActiveCfg = Debug|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug GDC|x64.Build.0 = Debug|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug|Win32.ActiveCfg = Debug|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug|Win32.Build.0 = Debug|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug|x64.ActiveCfg = Debug|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Debug|x64.Build.0 = Debug|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Release|Win32.ActiveCfg = Release|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Release|Win32.Build.0 = Release|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Release|x64.ActiveCfg = Release|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Release|x64.Build.0 = Release|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Win32 COFF|Win32.ActiveCfg = Release|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Win32 COFF|Win32.Build.0 = Release|Win32
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Win32 COFF|x64.ActiveCfg = Release|x64
+		{44A12FD3-3340-4F53-8437-81AF5D0741C4}.Win32 COFF|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

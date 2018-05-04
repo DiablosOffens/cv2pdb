@@ -199,8 +199,14 @@ public: virtual void MRECmp::structIsBoring(unsigned long);
 //public: virtual void * Pool<65536>::AllocBytes(unsigned int);
 //public: virtual void EnumSyms::get(unsigned char * *);
 
-typedef int __cdecl fnPDBOpen2W(const wchar_t *path,char const *mode,long *p,
-				wchar_t *ext,unsigned int flags,struct PDB **pPDB);
+enum PDBConsts {
+	niNil = 0,
+	PDB_MAX_PATH = 260,
+	cbErrMax = 1024,
+};
+
+typedef int __cdecl fnPDBOpen2W(const wchar_t *wszPDB,char const *szMode,long *pec,
+				wchar_t *wszError, size_t cchErrMax,struct PDB **ppPDB);
 
 struct PDB_part1 {
 public: virtual unsigned long QueryInterfaceVersion(void);
@@ -222,7 +228,7 @@ template<class BASE>
 struct PDB_part2 : public BASE {
 public: virtual int Commit(void);
 public: virtual int Close(void);
-public: virtual int OpenStreamW(unsigned short const *,struct Stream * *);
+public: virtual int OpenStream(char const *, struct Stream * *);
 public: virtual int GetEnumStreamNameMap(struct Enum * *);
 public: virtual int GetRawBytes(int (__cdecl*)(void const *,long));
 public: virtual unsigned long QueryPdbImplementationVersion(void);
@@ -234,9 +240,14 @@ public: virtual unsigned short * QueryPDBNameExW(unsigned short *,unsigned int);
 public: virtual int QuerySignature2(struct _GUID *);
 public: virtual int CopyToW(unsigned short const *,unsigned long,unsigned long);
 public: virtual int fIsSZPDB(void)const ;
-public: virtual int containsW(unsigned short const *,unsigned long *);
+public: virtual int OpenStreamW(unsigned short const *, struct Stream * *);
 public: virtual int CopyToW2(unsigned short const *,unsigned long,int (__cdecl*(__cdecl*)(void *,enum PCC))(void),void *);
 public: virtual int OpenStreamEx(char const *,char const *,struct Stream * *);
+public: virtual int RegisterPDBMapping(unsigned short const *, unsigned short const *);
+public: virtual int EnablePrefetching(void);
+public: virtual int FLazy(void);
+public: virtual int FMinimal(void);
+public: virtual int ResetGUID(void);
 };
 
 struct PDB_VS10 : public PDB_part2<PDB_part1> {};
@@ -252,7 +263,13 @@ public:
 	unsigned long QueryAge() { return vs10.QueryAge(); }
 	int CreateDBI(char const *n,struct DBI * *pdbi) { return vs10.CreateDBI(n, pdbi); }
 	int OpenTpi(char const *n,struct TPI * *ptpi)  { return vs10.OpenTpi(n, ptpi); }
-	long QueryLastError(char * const lastErr) { return vs10.QueryLastError(lastErr); }
+	long QueryLastError(char (&lastErr)[cbErrMax]) { return vs10.QueryLastError(lastErr); }
+
+	int OpenIpi(char const *n, struct IPI * *pipi) {
+		if (vsVersion >= 11)
+			return ((PDB_VS11*)&vs10)->OpenIpi(n, pipi);
+		return 0;
+	}
 
 	int Commit()
 	{
@@ -338,7 +355,7 @@ struct TypeChunk
 
 struct TypeData
 {
-	unsigned int magic; // 4: version? sizeof header?
+	unsigned int sig; // 4: CV signature 13
 	// followed by TypeChunks
 };
 
@@ -383,8 +400,48 @@ public: virtual int Mod::QueryPdbFileW(unsigned short * const,long *);
 public: virtual int Mod2::AddPublic2(char const *name,unsigned short sec,long off,unsigned long type);
 public: virtual int Mod::InsertLines(unsigned char *,long);
 public: virtual int Mod::QueryLines2(long,unsigned char *,long *);
+
+public: virtual int Mod::QueryCrossScopeExports(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryCrossScopeImports(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryInlineeLines(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::TranslateFileId(unsigned long id, unsigned long* pid);
+public: virtual int Mod::QueryFuncMDTokenMap(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryTypeMDTokenMap(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryMergedAssemblyInput(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryILLines(unsigned long cb, unsigned char* pb, unsigned long* pcb);
+public: virtual bool Mod::GetEnumILLines(EnumLines** ppenum);
+public: virtual bool Mod::QueryILLineFlags(unsigned long* pdwFlags);
+public: virtual int Mod::MergeTypes(unsigned char *pb, unsigned long cb);
+public: virtual int Mod::IsTypeServed(unsigned long index, int fID);
+public: virtual int Mod::QueryTypes(unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryIDs(unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryCVRecordForTi(unsigned long index, int fID, unsigned char* pb, unsigned long* pcb);
+public: virtual int Mod::QueryPbCVRecordForTi(unsigned long index, int fID, unsigned char** ppb);
+public: virtual int Mod::QueryTiForUDT(const char *sz, int fCase, unsigned long *pti);
+public: virtual int Mod::QueryCoffSymRVAs(unsigned char *pb, unsigned long *pcb);
+public: virtual int Mod::AddSecContrib2(unsigned short isect, unsigned long off, unsigned long isectCoff, unsigned long cb, unsigned long dwCharacteristics);
+public: virtual int Mod::AddSecContrib2Ex(unsigned short isect, unsigned long off, unsigned long isecfCoff, unsigned long cb, unsigned long dwCharacteristics, unsigned long dwDataCrc, unsigned long dwRelocCrc);
+public: virtual int Mod::AddSymbols2(unsigned char* pbSym, unsigned long cb, unsigned long isectCoff);
+public: virtual int Mod::RemoveGlobalRefs();
+public: virtual int Mod::QuerySrcLineForUDT(unsigned long ti, char **pszSrc, unsigned long *pLine);
+
 };
 
+enum DBGTYPE
+{
+	dbgtypeFPO,
+	dbgtypeException,   // deprecated
+	dbgtypeFixup,
+	dbgtypeOmapToSrc,
+	dbgtypeOmapFromSrc,
+	dbgtypeSectionHdr,
+	dbgtypeTokenRidMap,
+	dbgtypeXdata,
+	dbgtypePdata,
+	dbgtypeNewFPO,
+	dbgtypeSectionHdrOrig,
+	dbgtypeMax          // must be last!
+};
 
 struct DBI_part1 {
 public: virtual unsigned long QueryImplementationVersion(void);
@@ -408,16 +465,25 @@ public: virtual int getEnumContrib(struct Enum * *);
 public: virtual int QueryTypeServer(unsigned char,struct TPI * *);
 public: virtual int QueryItsmForTi(unsigned long,unsigned char *);
 public: virtual int QueryNextItsm(unsigned char,unsigned char *);
-public: virtual int reinitialize(void); // returns 0 (QueryLazyTypes in 10.0)
-public: virtual int SetLazyTypes(int);
-public: virtual int FindTypeServers(long *,char *);
-public: virtual void noop(void); // noop (_Reserved_was_QueryMreLog in 10.0)
-public: virtual int OpenDbg(enum DBGTYPE,struct Dbg * *);
-public: virtual int QueryDbgTypes(enum DBGTYPE *,long *);
-public: virtual int QueryAddrForSec(unsigned short *,long *,unsigned short,long,unsigned long,unsigned long);
 };
 struct DBI_part2 : public DBI_part1 {
+public: virtual int reinitialize(void);
+public: virtual int SetLazyTypes(int);
+public: virtual int FindTypeServers(long *, char *);
+public: virtual void noop(void);
+public: virtual int OpenDbg(enum DBGTYPE, struct Dbg * *);
+public: virtual int QueryDbgTypes(enum DBGTYPE *, long *);
+public: virtual int QueryAddrForSec(unsigned short *, long *, unsigned short, long, unsigned long, unsigned long);
+};
+struct DBI_part2_vs10 : public DBI_part1 {
 // in mspdb100.dll:
+public: virtual int QueryLazyTypes(void);
+public: virtual int SetLazyTypes(int);
+public: virtual int FindTypeServers(long *, char *);
+public: virtual void DumpTypeServers(void);
+public: virtual int OpenDbg(enum DBGTYPE, struct Dbg * *);
+public: virtual int QueryDbgTypes(enum DBGTYPE *, long *);
+public: virtual int QueryAddrForSec(unsigned short *, long *, unsigned short, long, unsigned long, unsigned long);
 public: virtual int QueryAddrForSecEx(unsigned short *,long *,unsigned short,long,unsigned long,unsigned long);
 };
 
@@ -428,7 +494,7 @@ public: virtual int QueryPdb(struct PDB * *);
 public: virtual int AddLinkInfo(struct LinkInfo *);
 public: virtual int QueryLinkInfo(struct LinkInfo *,long *);
 public: virtual unsigned long QueryAge(void)const ;
-public: virtual int reinitialize2(void);  // returns 0 (QueryLazyTypes in 10.0)
+public: virtual void * QueryHeader(void);
 public: virtual void FlushTypeServers(void);
 public: virtual int QueryTypeServerByPdb(char const *,unsigned char *);
 public: virtual int OpenModW(unsigned short const *objName,unsigned short const *libName,struct Mod * *);
@@ -452,10 +518,13 @@ public: virtual int FSetPfnNotePdbUsed(void *,void (__cdecl*)(void *,unsigned sh
 public: virtual int FCTypes(void);
 public: virtual int QueryFileInfo2(unsigned char *,long *);
 public: virtual int FSetPfnQueryCallback(void *,int (__cdecl*(__cdecl*)(void *,enum DOVC))(void));
+public: virtual int FSetPfnNoteTypeMismatch(void *, void (__cdecl *)(void *,unsigned short const *,unsigned short const *));
+public: virtual int FSetPfnTmdTypeFilter(void *, int (__cdecl *)(void *,unsigned short const *));
+public: virtual int RemovePublic(const char*);
 };
 
-struct DBI_VS9  : public DBI_BASE<DBI_part1> {};
-struct DBI_VS10 : public DBI_BASE<DBI_part2> {};
+struct DBI_VS9  : public DBI_BASE<DBI_part2> {};
+struct DBI_VS10 : public DBI_BASE<DBI_part2_vs10> {};
 
 struct DBI
 {
@@ -465,6 +534,8 @@ struct DBI
     unsigned long QueryInterfaceVersion() { return vs9.QueryInterfaceVersion(); }
     int Close() { return vs9.Close(); }
     int OpenMod(char const *objName,char const *libName,struct Mod * *pmod) { return vs9.OpenMod(objName,libName,pmod); }
+	int OpenGlobals(struct GSI * *pgsi) { return vs9.OpenGlobals(pgsi); }
+	int OpenDbg(enum DBGTYPE dbgtype, struct Dbg * *ppdbg) { return vs9.OpenDbg(dbgtype, ppdbg); }
     int AddSec(unsigned short sec,unsigned short flags,long offset,long cbseg) { return vs9.AddSec(sec,flags,offset,cbseg); }
 
     int AddPublic2(char const *name,unsigned short sec,long off,unsigned long type)
@@ -532,6 +603,10 @@ public: virtual int TPI2::IsTypeServed(unsigned long);
 public: virtual int TPI::QueryTiForUDTW(unsigned short const *,int,unsigned long *);
 };
 
+struct IPI: public TPI {
+};
+
+typedef int __cdecl fnopenNameMap(struct PDB* ppdb, int fWrite, struct NameMap **ppnm);
 
 struct NameMap {
 public: virtual int NameMap::close(void);
@@ -571,6 +646,9 @@ bool initMsPdb();
 bool exitMsPdb();
 
 mspdb::PDB* CreatePDB(const wchar_t* pdbname);
+mspdb::PDB* OpenPDB(const wchar_t* pdbname);
+mspdb::NameMap* CreateNameMap(mspdb::PDB* pdb);
+mspdb::NameMap* OpenNameMap(mspdb::PDB* pdb);
 
 extern char* mspdb_dll;
 

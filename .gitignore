@@ -2,3 +2,8 @@
 /src/cv2pdb_vs12.sdf
 /src/cv2pdb_vs12.v12.suo
 /test/obj
+*.VC.opendb
+*.VC.db
+*.vcxproj.user
+.vs
+/src/ipch

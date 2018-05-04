@@ -148,112 +148,136 @@ bool _flushDWARFLines(const PEImage& img, mspdb::Mod* mod, DWARF_LineState& stat
 
 bool interpretDWARFLines(const PEImage& img, mspdb::Mod* mod)
 {
-	for(unsigned long off = 0; off < img.debug_line_length; )
+	// no actual compilation unit
+	CompilationUnitData cu;
+	memset(&cu, 0, sizeof(cu));
+	for (unsigned long long off = 0; off < img.debug_line_length; )
 	{
-		DWARF_LineNumberProgramHeader* hdr = (DWARF_LineNumberProgramHeader*) (img.debug_line + off);
-		int length = hdr->unit_length;
-		if(length < 0)
-			break;
-		length += sizeof(length);
+		DWARF_LineNumberProgramHeader* hdr = (DWARF_LineNumberProgramHeader*)(img.debug_line + off);
+		cu.stmt_list.type = LinePtr;
+		cu.stmt_list.sec_off.ptr = (byte*)img.debug_line;
+		cu.stmt_list.sec_off.len = img.debug_line_length;
+		cu.stmt_list.sec_off.off = off;
 
-		unsigned char* p = (unsigned char*) (hdr + 1);
-		unsigned char* end = (unsigned char*) hdr + length;
+		if (!interpretDWARFLines(cu, img, mod))
+			return false;
 
-		std::vector<unsigned int> opcode_lengths;
-		opcode_lengths.resize(hdr->opcode_base);
-		if (hdr->opcode_base > 0)
+		off += hdr->getLength();
+	}
+	return true;
+}
+
+bool interpretDWARFLines(const CompilationUnitData& cu, const PEImage& img, mspdb::Mod* mod)
+{
+	if (cu.stmt_list.type != LinePtr)
+		return false;
+	if (cu.stmt_list.sec_off.off >= cu.stmt_list.sec_off.len)
+		return false;
+
+	DWARF_LineNumberProgramHeader* hdr = (DWARF_LineNumberProgramHeader*)(cu.stmt_list.sec_off.ptr + cu.stmt_list.sec_off.off);
+	//if(hdr->isDWARF64())
+	//	break;
+	unsigned long long length = hdr->getLength();
+
+	unsigned char* p = (unsigned char*)hdr + hdr->getOffsetForVarArrays();
+	unsigned char* end = (unsigned char*)hdr + length;
+
+	byte opcode_base = hdr->getOpcodeBase();
+	byte line_range = hdr->getLineRange();
+	signed char line_base = hdr->getLineBase();
+	std::vector<byte> opcode_lengths(opcode_base);
+	if (opcode_base > 0)
+	{
+		opcode_lengths[0] = 0;
+		for (int o = 1; o < opcode_base && p < end; o++)
+			opcode_lengths[o] = *p++;
+	}
+
+	DWARF_LineState state;
+	state.seg_offset = img.getSectionVMA(img.codeSegment);
+
+	// dirs
+	while (p < end && *p)
+	{
+		state.include_dirs.push_back((const char*)p);
+		p += strlen((const char*)p) + 1;
+	}
+	p++;
+
+	// files
+	DWARF_FileName fname;
+	while (p < end && *p)
+	{
+		fname.read(p);
+		state.files.push_back(fname);
+	}
+	p++;
+
+	state.init(hdr);
+	while (p < end)
+	{
+		byte opcode = *p++;
+		if (opcode >= opcode_base)
 		{
-			opcode_lengths[0] = 0;
-			for(int o = 1; o < hdr->opcode_base && p < end; o++)
-				opcode_lengths[o] = LEB128(p);
+			// special opcode
+			unsigned adjusted_opcode = opcode - opcode_base;
+			unsigned operation_advance = adjusted_opcode / line_range;
+			state.advance_addr(operation_advance);
+			int line_advance = line_base + (adjusted_opcode % line_range);
+			state.line += line_advance;
+
+			state.addLineInfo();
+
+			state.basic_block = false;
+			state.prologue_end = false;
+			state.epilogue_end = false;
+			state.discriminator = 0;
 		}
-
-		DWARF_LineState state;
-		state.seg_offset = img.getImageBase() + img.getSection(img.codeSegment).VirtualAddress;
-
-		// dirs
-		while(p < end)
+		else
 		{
-			if(*p == 0)
-				break;
-			state.include_dirs.push_back((const char*) p);
-			p += strlen((const char*) p) + 1;
-		}
-		p++;
-
-		// files
-		DWARF_FileName fname;
-		while(p < end && *p)
-		{
-			fname.read(p);
-			state.files.push_back(fname);
-		}
-		p++;
-
-		state.init(hdr);
-		while(p < end)
-		{
-			int opcode = *p++;
-			if(opcode >= hdr->opcode_base)
+			if (opcode == 0) // extended
 			{
-				// special opcode
-				int adjusted_opcode = opcode - hdr->opcode_base;
-				int operation_advance = adjusted_opcode / hdr->line_range;
-				state.advance_addr(hdr, operation_advance);
-				int line_advance = hdr->line_base + (adjusted_opcode % hdr->line_range);
-				state.line += line_advance;
-
-				state.addLineInfo();
-
-				state.basic_block = false;
-				state.prologue_end = false;
-				state.epilogue_end = false;
-				state.discriminator = 0;
+				unsigned long long exlength = LEB128<unsigned long long>(p);
+				unsigned char* q = p + exlength;
+				int excode = *p++;
+				switch (excode)
+				{
+				case DW_LNE_end_sequence:
+					if (p - cu.stmt_list.sec_off.ptr >= 0xe4e0)
+						p = p;
+					state.end_sequence = true;
+					state.last_addr = state.address;
+					state.addLineInfo();
+					if (!_flushDWARFLines(img, mod, state))
+						return false;
+					state.init(hdr);
+					break;
+				case DW_LNE_set_address:
+					if (!mod && state.section == -1)
+						state.section = img.getRelocationInLineSegment(p - cu.stmt_list.sec_off.ptr);
+					if (unsigned long adr = RD4(p))
+						state.address = adr;
+					else if (!mod)
+						state.address = adr;
+					else
+						state.address = state.last_addr; // strange adr 0 for templates?
+					state.op_index = 0;
+					break;
+				case DW_LNE_define_file:
+					fname.read(p);
+					state.file_ptr = &fname;
+					state.file = 0;
+					break;
+				case DW_LNE_set_discriminator:
+					state.discriminator = LEB128<unsigned int>(p);
+					break;
+				}
+				p = q;
 			}
 			else
 			{
-				switch(opcode)
+				switch (opcode)
 				{
-				case 0: // extended
-				{
-					int exlength = LEB128(p);
-					unsigned char* q = p + exlength;
-					int excode = *p++;
-					switch(excode)
-					{
-					case DW_LNE_end_sequence:
-						if((char*)p - img.debug_line >= 0xe4e0)
-							p = p;
-						state.end_sequence = true;
-						state.last_addr = state.address;
-						state.addLineInfo();
-						if(!_flushDWARFLines(img, mod, state))
-							return false;
-						state.init(hdr);
-						break;
-					case DW_LNE_set_address:
-                        if (!mod && state.section == -1)
-                            state.section = img.getRelocationInLineSegment((char*)p - img.debug_line);
-						if(unsigned long adr = RD4(p))
-							state.address = adr;
-						else if (!mod)
-							state.address = adr;
-                        else
-							state.address = state.last_addr; // strange adr 0 for templates?
-						state.op_index = 0;
-						break;
-					case DW_LNE_define_file:
-						fname.read(p);
-						state.file_ptr = &fname;
-						state.file = 0;
-						break;
-					case DW_LNE_set_discriminator:
-						state.discriminator = LEB128(p);
-						break;
-					}
-					p = q;
-					break;
-				}
 				case DW_LNS_copy:
 					state.addLineInfo();
 					state.basic_block = false;
@@ -262,18 +286,18 @@ bool interpretDWARFLines(const PEImage& img, mspdb::Mod* mod)
 					state.discriminator = 0;
 					break;
 				case DW_LNS_advance_pc:
-					state.advance_addr(hdr, LEB128(p));
+					state.advance_addr(LEB128<unsigned long long>(p));
 					break;
 				case DW_LNS_advance_line:
-					state.line += SLEB128(p);
+					state.line += SLEB128<int>(p);
 					break;
 				case DW_LNS_set_file:
-					if(!_flushDWARFLines(img, mod, state))
+					if (!_flushDWARFLines(img, mod, state))
 						return false;
-					state.file = LEB128(p);
+					state.file = LEB128<unsigned int>(p);
 					break;
 				case DW_LNS_set_column:
-					state.column = LEB128(p);
+					state.column = LEB128<unsigned int>(p);
 					break;
 				case DW_LNS_negate_stmt:
 					state.is_stmt = !state.is_stmt;
@@ -282,7 +306,7 @@ bool interpretDWARFLines(const PEImage& img, mspdb::Mod* mod)
 					state.basic_block = true;
 					break;
 				case DW_LNS_const_add_pc:
-					state.advance_addr(hdr, (255 - hdr->opcode_base) / hdr->line_range);
+					state.advance_addr((255 - opcode_base) / line_range);
 					break;
 				case DW_LNS_fixed_advance_pc:
 					state.address += RD2(p);
@@ -295,21 +319,19 @@ bool interpretDWARFLines(const PEImage& img, mspdb::Mod* mod)
 					state.epilogue_end = true;
 					break;
 				case DW_LNS_set_isa:
-					state.isa = LEB128(p);
+					state.isa = LEB128<unsigned int>(p);
 					break;
 				default:
 					// unknown standard opcode
-					for(unsigned int arg = 0; arg < opcode_lengths[opcode]; arg++)
-						LEB128(p);
+					for (byte arg = 0; arg < opcode_lengths[opcode]; arg++)
+						LEB128<unsigned long long>(p);
 					break;
 				}
 			}
 		}
-		if(!_flushDWARFLines(img, mod, state))
-			return false;
-
-		off += length;
 	}
+	if (!_flushDWARFLines(img, mod, state))
+		return false;
 
 	return true;
 }

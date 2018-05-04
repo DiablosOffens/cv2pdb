@@ -108,6 +108,12 @@ struct p_string
     char                        name[1];
 };
 
+#define CV_SIGNATURE_C6         0L  // Actual signature is >64K
+#define CV_SIGNATURE_C7         1L  // First explicit signature
+#define CV_SIGNATURE_C11        2L  // C11 (vc5.x) 32-bit types
+#define CV_SIGNATURE_C13        4L  // C13 (vc7.x) zero terminated names
+#define CV_SIGNATURE_RESERVED   5L  // All signatures from 5 to 64K are reserved
+
 union codeview_type
 {
     struct
@@ -138,7 +144,6 @@ union codeview_type
         short int               id;
         short int               attribute;
         unsigned short int      datatype;
-        struct p_string         p_name;
     } pointer_v1;
 
     struct
@@ -147,8 +152,65 @@ union codeview_type
         short int               id;
         unsigned int            datatype;
         unsigned int            attribute;
-        struct p_string         p_name;
     } pointer_v2;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		short int               attribute;
+		unsigned short int      datatype;
+		unsigned short int      pmclass;    // index of containing class for pointer to member
+		unsigned short int		pmenum;     // enumeration specifying pm format (CV_pmtype_e)
+	} pointer_to_member_v1;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		unsigned int            datatype;
+		unsigned int            attribute;
+		unsigned int			pmclass;    // index of containing class for pointer to member
+		unsigned short int		pmenum;     // enumeration specifying pm format (CV_pmtype_e)
+	} pointer_to_member_v2;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		short int               attribute;
+		unsigned short int      datatype;
+		unsigned short int		pointertype;	// type index if CV_PTR_BASE_TYPE
+		struct p_string         p_name;			// name of base type
+	} pointer_base_type_v1;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		unsigned int            datatype;
+		unsigned int            attribute;
+		unsigned int            pointertype;	// type index if CV_PTR_BASE_TYPE
+		struct p_string         p_name;			// name of base type
+	} pointer_base_type_v2;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		short int               attribute;
+		unsigned short int      datatype;
+		unsigned short int		bseg;			// base segment if CV_PTR_BASE_SEG
+	} pointer_base_seg_v1;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		unsigned int            datatype;
+		unsigned int            attribute;
+		unsigned short int		bseg;			// base segment if CV_PTR_BASE_SEG
+	} pointer_base_seg_v2;
 
     struct
     {
@@ -309,7 +371,7 @@ union codeview_type
         short int               id;
         unsigned short int      rvtype;
         unsigned char           call;
-        unsigned char           reserved;
+        unsigned char           attr;
         unsigned short int      params;
         unsigned short int      arglist;
     } procedure_v1;
@@ -320,7 +382,7 @@ union codeview_type
         short int               id;
         unsigned int            rvtype;
         unsigned char           call;
-        unsigned char           reserved;
+        unsigned char           attr;
         unsigned short int      params;
         unsigned int            arglist;
     } procedure_v2;
@@ -333,7 +395,7 @@ union codeview_type
         unsigned short int      class_type;
         unsigned short int      this_type;
         unsigned char           call;
-        unsigned char           reserved;
+        unsigned char           attr;
         unsigned short int      params;
         unsigned short int      arglist;
         unsigned int            this_adjust;
@@ -347,11 +409,56 @@ union codeview_type
         unsigned int            class_type;
         unsigned                this_type;
         unsigned char           call;
-        unsigned char           reserved;
+        unsigned char           attr;
         unsigned short          params;
         unsigned int            arglist;
         unsigned int            this_adjust;
     } mfunction_v2;
+
+	struct
+	{
+		unsigned short int      len;
+		short int				id;			// LF_FUNC_ID
+		unsigned long			scopeId;    // parent scope of the ID, 0 if global
+		unsigned long			type;       // function type
+		unsigned char			name[1];
+	} funcid_v3;
+
+	struct
+	{
+		unsigned short int      len;
+		short int				id;			// LF_MFUNC_ID
+		unsigned long			parentType; // type index of parent
+		unsigned long			type;       // function type
+		unsigned char			name[1];
+	} mfuncid_v3;
+
+	struct
+	{
+		unsigned short int      len;
+		short int				id;			// LF_STRING_ID
+		unsigned long			listid;     // ID to list of sub string IDs
+		unsigned char			name[1];
+	} stringid_v3;
+
+	struct
+	{
+		unsigned short int      len;
+		short int				id;			// LF_UDT_SRC_LINE
+		unsigned long			type;       // UDT's type index
+		unsigned long			src;        // index to LF_STRING_ID record where source file name is saved
+		unsigned long			line;       // line number
+	} udt_src_line;
+
+	struct
+	{
+		unsigned short int      len;
+		short int				id;			// LF_UDT_MOD_SRC_LINE
+		unsigned long			type;		// UDT's type index
+		unsigned long			src;		// index into string table where source file name is saved
+		unsigned long			line;		// line number
+		unsigned short			imod;		// module that contributes this UDT definition 
+	} udt_mod_src_line;
 };
 
 union codeview_reftype
@@ -368,6 +475,13 @@ union codeview_reftype
         short int               id;
         unsigned char           list[1];
     } fieldlist;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		unsigned char           list[1];
+	} methodlist;
 
     struct
     {
@@ -418,6 +532,14 @@ union codeview_reftype
         unsigned                num;
         unsigned                drvdcls[1];
     } derived_v2;
+
+	struct
+	{
+		unsigned short int      len;
+		short int               id;
+		unsigned short          num;
+		unsigned char			desc[1];     // 4 bit (CV_VTS_desc) descriptors
+	} vtshape_v1;
 };
 
 union codeview_fieldtype
@@ -662,7 +784,7 @@ union codeview_fieldtype
         short int          id;
         short int          attribute;
         unsigned short int type;
-        unsigned int       vtab_offset;
+        unsigned long       vtab_offset;
         struct p_string    p_name;
     } onemethod_virt_v1;
 
@@ -671,7 +793,7 @@ union codeview_fieldtype
         short int		id;
         short int		attribute;
         unsigned int	        type;
-        unsigned int	        vtab_offset;
+        unsigned long	        vtab_offset;
         struct p_string         p_name;
     } onemethod_virt_v2;
 
@@ -680,7 +802,7 @@ union codeview_fieldtype
         short int		id;
         short int		attribute;
         unsigned int	        type;
-        unsigned int	        vtab_offset;
+        unsigned long	        vtab_offset;
         char                    name[1];
     } onemethod_virt_v3;
 
@@ -737,6 +859,36 @@ union codeview_fieldtype
     } index_v2;
 };
 
+union codeview_mltype
+{
+	struct
+	{
+		short int          attribute;
+		unsigned short int type;
+	} method_v1;
+
+	struct
+	{
+		short int          attribute;
+		unsigned short	   _pad0;
+		unsigned int       type;
+	} method_v2;
+
+	struct
+	{
+		short int          attribute;
+		unsigned short int type;
+		unsigned long	   vbaseoff;    // offset in vfunctable if intro virtual
+	} method_virt_v1;
+
+	struct
+	{
+		short int          attribute;
+		unsigned short	   _pad0;
+		unsigned int       type;
+		unsigned long	   vbaseoff;    // offset in vfunctable if intro virtual
+	} method_virt_v2;
+};
 
 /*
  * This covers the basic datatypes that VC++ seems to be using these days.
@@ -1186,18 +1338,57 @@ union codeview_fieldtype
 #define LF_ONEMETHOD_V2         0x140b
 #define LF_VFUNCOFF_V2          0x140c
 #define LF_NESTTYPEEX_V2        0x140d
+#define LF_MEMBERMODIFY_V2		0x140e
+#define LF_MANAGED_V2			0x140f
 
+#define LF_TYPESERVER_V3		0x1501       /* not referenced from symbol */
 #define LF_ENUMERATE_V3         0x1502
 #define LF_ARRAY_V3             0x1503
 #define LF_CLASS_V3             0x1504
 #define LF_STRUCTURE_V3         0x1505
 #define LF_UNION_V3             0x1506
 #define LF_ENUM_V3              0x1507
+#define LF_DIMARRAY_V3			0x1508
+#define LF_PRECOMP_V3			0x1509       /* not referenced from symbol */
+#define LF_ALIAS_V3				0x150a       /* alias (typedef) type */
+#define LF_DEFARG_V3			0x150b
+#define LF_FRIENDFCN_V3			0x150c
 #define LF_MEMBER_V3            0x150d
 #define LF_STMEMBER_V3          0x150e
 #define LF_METHOD_V3            0x150f
 #define LF_NESTTYPE_V3          0x1510
 #define LF_ONEMETHOD_V3         0x1511
+#define LF_NESTTYPEEX_V3		0x1512
+#define LF_MEMBERMODIFY_V3		0x1513
+#define LF_MANAGED_V3			0x1514
+#define LF_TYPESERVER2_V3		0x1515
+
+#define LF_STRIDED_ARRAY_V3		0x1516    /* same as LF_ARRAY, but with stride between adjacent elements */
+#define LF_HLSL_V3				0x1517
+#define LF_MODIFIER_EX_V3		0x1518
+#define LF_INTERFACE_V3			0x1519
+#define LF_BINTERFACE_V3		0x151a
+#define LF_VECTOR_V3			0x151b
+#define LF_MATRIX_V3			0x151c
+
+#define LF_VFTABLE_V3			0x151d      /* a virtual function table */
+//#define LF_ENDOFLEAFRECORD		LF_VFTABLE
+
+//#define LF_TYPE_LAST			0x151e      /* one greater than the last type record */
+//#define LF_TYPE_MAX				(LF_TYPE_LAST - 1)
+
+
+
+#define LF_FUNC_ID				0x1601    /* global func ID */
+#define LF_MFUNC_ID				0x1602    /* member func ID */
+#define LF_BUILDINFO			0x1603    /* build info: tool, version, command line, src/pdb file */
+#define LF_SUBSTR_LIST			0x1604    /* similar to LF_ARGLIST, for list of sub strings */
+#define LF_STRING_ID			0x1605    /* string ID */
+
+#define LF_UDT_SRC_LINE			0x1606    /* source and line on where an UDT is defined
+											only generated by compiler */
+
+#define LF_UDT_MOD_SRC_LINE		0x1607    /* module, source and line on where an UDT is defined */
 
 #define LF_NUMERIC              0x8000    /* numeric leaf types */
 #define LF_CHAR                 0x8000
@@ -1218,9 +1409,172 @@ union codeview_fieldtype
 #define LF_COMPLEX128           0x800f
 #define LF_VARSTRING            0x8010
 
+#define CV_CALL_NEAR_C		0x00 /* near right to left push, caller pops stack */
+#define CV_CALL_FAR_C		0x01 /* far right to left push, caller pops stack */
+#define CV_CALL_NEAR_PASCAL	0x02 /* near left to right push, callee pops stack */
+#define CV_CALL_FAR_PASCAL	0x03 /* far left to right push, callee pops stack */
+#define CV_CALL_NEAR_FAST	0x04 /* near left to right push with regs, callee pops stack */
+#define CV_CALL_FAR_FAST	0x05 /* far left to right push with regs, callee pops stack */
+#define CV_CALL_SKIPPED		0x06 /* skipped (unused) call index */
+#define CV_CALL_NEAR_STD	0x07 /* near standard call */
+#define CV_CALL_FAR_STD		0x08 /* far standard call */
+#define CV_CALL_NEAR_SYS	0x09 /* near sys call */
+#define CV_CALL_FAR_SYS		0x0a /* far sys call */
+#define CV_CALL_THISCALL	0x0b /* this call (this passed in register) */
+#define CV_CALL_MIPSCALL	0x0c /* Mips call */
+#define CV_CALL_GENERIC		0x0d /* Generic call sequence */
+#define CV_CALL_ALPHACALL	0x0e /* Alpha call */
+#define CV_CALL_PPCCALL		0x0f /* PPC call */
+#define CV_CALL_SHCALL		0x10 /* Hitachi SuperH call */
+#define CV_CALL_ARMCALL		0x11 /* ARM call */
+#define CV_CALL_AM33CALL	0x12 /* AM33 call */
+#define CV_CALL_TRICALL		0x13 /* TriCore Call */
+#define CV_CALL_SH5CALL		0x14 /* Hitachi SuperH-5 call */
+#define CV_CALL_M32RCALL	0x15 /* M32R Call */
+#define CV_CALL_CLRCALL		0x16 /* clr call */
+#define CV_CALL_INLINE		0x17 /* Marker for routines always inlined and thus lacking a convention */
+#define CV_CALL_NEAR_VECTOR	0x18 /* near left to right push with regs, callee pops stack */
+#define CV_CALL_RESERVED	0x19  /* first unused call enumeration */
+// Do NOT add any more machine specific conventions.  This is to be used for
+// calling conventions in the source only (e.g. __cdecl, __stdcall).
+
+// enumeration for type modifier values
+// 0x0000 - 0x01ff - Reserved.
+#define CV_MOD_INVALID			0x0000
+// Standard modifiers.
+#define CV_MOD_CONST			0x0001
+#define CV_MOD_VOLATILE			0x0002
+#define CV_MOD_UNALIGNED		0x0003
+// 0x0200 - 0x03ff - HLSL modifiers.
+#define CV_MOD_HLSL_UNIFORM		0x0200
+#define CV_MOD_HLSL_LINE		0x0201
+#define CV_MOD_HLSL_TRIANGLE	0x0202
+#define CV_MOD_HLSL_LINEADJ		0x0203
+#define CV_MOD_HLSL_TRIANGLEADJ	0x0204
+#define CV_MOD_HLSL_LINEAR		0x0205
+#define CV_MOD_HLSL_CENTROID	0x0206
+#define CV_MOD_HLSL_CONSTINTERP	0x0207
+#define CV_MOD_HLSL_NOPERSPECTIVE	0x0208
+#define CV_MOD_HLSL_SAMPLE		0x0209
+#define CV_MOD_HLSL_CENTER		0x020a
+#define CV_MOD_HLSL_SNORM		0x020b
+#define CV_MOD_HLSL_UNORM		0x020c
+#define CV_MOD_HLSL_PRECISE		0x020d
+#define CV_MOD_HLSL_UAV_GLOBALLY_COHERENT 0x020e
+// 0x0400 - 0xffff - Unused.
+
+// enumeration for virtual shape table entries
+#define CV_VTS_near         0x00
+#define CV_VTS_far          0x01
+#define CV_VTS_thin         0x02
+#define CV_VTS_outer        0x03
+#define CV_VTS_meta         0x04
+#define CV_VTS_near32       0x05
+#define CV_VTS_far32        0x06
+#define CV_VTS_unused       0x07
+
+// enumeration for LF_MODIFIER values
+#define CV_modifier_const		1
+#define CV_modifier_volatile	2
+#define CV_modifier_unaligned	4
+
+#define CV_MTvanilla        0x00
+#define CV_MTvirtual        0x01
+#define CV_MTstatic         0x02
+#define CV_MTfriend         0x03
+#define CV_MTintro          0x04
+#define CV_MTpurevirt       0x05
+#define CV_MTpureintro      0x06
+
+#define CV_fldattr_noaccess    0x00
+#define CV_fldattr_private     0x01
+#define CV_fldattr_protected   0x02
+#define CV_fldattr_public      0x03
+#define CV_fldattr_MTvanilla   (CV_MTvanilla << 2)  
+#define CV_fldattr_MTvirtual   (CV_MTvirtual << 2)  
+#define CV_fldattr_MTstatic    (CV_MTstatic << 2)   
+#define CV_fldattr_MTfriend    (CV_MTfriend << 2)   
+#define CV_fldattr_MTintro     (CV_MTintro << 2)    
+#define CV_fldattr_MTpurevirt  (CV_MTpurevirt << 2) 
+#define CV_fldattr_MTpureintro (CV_MTpureintro << 2)
+#define CV_fldattr_MTreserved  (0x07 << 2)
+#define CV_fldattr_MTmask	   CV_fldattr_MTreserved
+#define CV_fldattr_pseudo      0x20    /* compiler generated fcn and does not exist */
+#define CV_fldattr_noinherit   0x40    /* true if class cannot be inherited */
+#define CV_fldattr_noconstruct 0x80    /* true if class cannot be constructed */
+#define CV_fldattr_compgenx    0x100   /* compiler generated fcn and does exist */
+#define CV_fldattr_sealed      0x200   /* true if method cannot be overridden */
+
+#define CV_funcattr_cxxreturnudt	1  /* true if C++ style ReturnUDT */
+#define CV_funcattr_ctor			2  /* true if func is an instance constructor */
+#define CV_funcattr_ctorvbase		4  /* true if func is an instance constructor of a class with virtual bases */
+
+#define CV_PTR_BASE_MASK	0x1f
+#define CV_PTR_NEAR			0x00 /* 16 bit pointer */
+#define CV_PTR_FAR			0x01 /* 16:16 far pointer */
+#define CV_PTR_HUGE			0x02 /* 16:16 huge pointer */
+#define CV_PTR_BASE_SEG		0x03 /* based on segment */
+#define CV_PTR_BASE_VAL		0x04 /* based on value of base */
+#define CV_PTR_BASE_SEGVAL	0x05 /* based on segment value of base */
+#define CV_PTR_BASE_ADDR	0x06 /* based on address of base */
+#define CV_PTR_BASE_SEGADDR	0x07 /* based on segment address of base */
+#define CV_PTR_BASE_TYPE	0x08 /* based on type */
+#define CV_PTR_BASE_SELF	0x09 /* based on self */
+#define CV_PTR_NEAR32		0x0a /* 32 bit pointer */
+#define CV_PTR_FAR32		0x0b /* 16:32 pointer */
+#define CV_PTR_64			0x0c /* 64 bit pointer */
+#define CV_PTR_UNUSEDPTR	0x0d /* first unused pointer type */
+
+#define CV_PTR_MODE_MASK	(0x07 << 5)
+#define CV_PTR_MODE_PTR		(0x00 << 5) /* "normal" pointer */
+#define CV_PTR_MODE_REF		(0x01 << 5) /* "old" reference */
+#define CV_PTR_MODE_LVREF	(0x01 << 5) /* l-value reference */
+#define CV_PTR_MODE_PMEM	(0x02 << 5) /* pointer to data member */
+#define CV_PTR_MODE_PMFUNC	(0x03 << 5) /* pointer to member function */
+#define CV_PTR_MODE_RVREF	(0x04 << 5) /* r-value reference */
+#define CV_PTR_MODE_RESERVED	(0x05 << 5)  /* first unused pointer mode */
+
+#define CV_PTR_isflat32		(1 << 8) /* true if 0:32 pointer */
+#define CV_PTR_isvolatile	(1 << 9) /* TRUE if volatile pointer */
+#define CV_PTR_isconst		(1 << 10) /* TRUE if const pointer */
+#define CV_PTR_isunaligned	(1 << 11) /* TRUE if unaligned pointer */
+#define CV_PTR_isrestrict	(1 << 12) /* TRUE if restricted pointer (allow agressive opts) */
+#define CV_PTR_size_mask	(0x3f << 13)
+#define CV_PTR_size(s)		(((s)&0x3f) << 13) /* size of pointer (in bytes) */
+#define CV_PTR_ismocom		(1 << 19) /* TRUE if it is a MoCOM pointer (^ or %) */
+#define CV_PTR_islref		(1 << 20) /* TRUE if it is this pointer of member function with & ref-qualifier */
+#define CV_PTR_isrref		(1 << 21) /* TRUE if it is this pointer of member function with && ref-qualifier */
+
+#define CV_PMTYPE_Undef			0x00 /* not specified (pre VC8) */
+#define CV_PMTYPE_D_Single		0x01 /* member data, single inheritance */
+#define CV_PMTYPE_D_Multiple	0x02 /* member data, multiple inheritance */
+#define CV_PMTYPE_D_Virtual		0x03 /* member data, virtual inheritance */
+#define CV_PMTYPE_D_General		0x04 /* member data, most general */
+#define CV_PMTYPE_F_Single		0x05 /* member function, single inheritance */
+#define CV_PMTYPE_F_Multiple	0x06 /* member function, multiple inheritance */
+#define CV_PMTYPE_F_Virtual		0x07 /* member function, virtual inheritance */
+#define CV_PMTYPE_F_General		0x08 /* member function, most general */
+
+
 /* ======================================== *
  *            Symbol information
  * ======================================== */
+
+// represents an address range, used for optimized code debug info
+
+struct CV_LVAR_ADDR_RANGE {       // defines a range of addresses
+	unsigned long   offStart;
+	unsigned short  isectStart;
+	unsigned short  cbRange;
+};
+
+// Represents the holes in overall address range, all address is pre-bbt. 
+// it is for compress and reduce the amount of relocations need.
+
+struct CV_LVAR_ADDR_GAP {
+	unsigned short  gapStartOffset;   // relative offset from the beginning of the live range.
+	unsigned short  cbRange;          // length of this gap.
+};
 
 union codeview_symbol
 {
@@ -1229,6 +1583,40 @@ union codeview_symbol
         short int	        len;
         short int	        id;
     } generic;
+
+	struct
+	{
+		short int	        len;
+		short int	        id;
+		unsigned long		pparent;    // pointer to the parent
+		unsigned long		pend;       // pointer to this blocks end
+	} generic_block;
+
+	struct
+	{
+		short int	        len;
+		short int	        id;
+		unsigned long		pparent;    // pointer to the parent
+		unsigned long		pend;       // pointer to this blocks end
+	} generic_with;
+
+	struct
+	{
+		short int	        len;
+		short int	        id;
+		unsigned long		pparent;    // pointer to the parent
+		unsigned long		pend;       // pointer to this blocks end
+		unsigned long		pnext;      // pointer to next symbol
+	} generic_proc;
+
+	struct
+	{
+		short int	        len;
+		short int	        id;
+		unsigned long		pparent;    // pointer to the parent
+		unsigned long		pend;       // pointer to this blocks end
+		unsigned long		pnext;      // pointer to next symbol
+	} generic_thunk;
 
     struct
     {
@@ -1450,13 +1838,155 @@ union codeview_symbol
         char                    name[1];
     } block_v3;
 
+	struct
+	{
+		short int			len;		// Record length
+		short int			id;			// S_INLINESITE
+		unsigned long		pParent;	// pointer to the inliner
+		unsigned long		pEnd;		// pointer to this block's end
+		unsigned long       inlinee;	// CV_ItemId of inlinee
+#if 0
+		unsigned char		binaryAnnotations[0];   // an array of compressed binary annotations.
+#endif
+	} inline_site;
+
+	struct
+	{
+		short int			len;			// Record length
+		short int			id;				// S_INLINESITE2
+		unsigned long		pParent;        // pointer to the inliner
+		unsigned long		pEnd;           // pointer to this block's end
+		unsigned long       inlinee;        // CV_ItemId of inlinee
+		unsigned long		invocations;    // entry count
+#if 0
+		unsigned char		binaryAnnotations[0];   // an array of compressed binary annotations.
+#endif
+	} inline_site2;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_LOCAL_V2 */
+		unsigned int		type;           /* check whether type & reg are correct */
+		unsigned short		flags;	// local var flags
+		struct p_string     p_name;   // Name of this symbol, a null terminated array of UTF8 characters.
+	} local_v2;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_LOCAL_V3 */
+		unsigned int		type;           /* check whether type & reg are correct */
+		unsigned short		flags;	// local var flags
+		unsigned char		name[1];   // Name of this symbol, a null terminated array of UTF8 characters.
+	} local_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_V3 */
+
+		unsigned long   program;    // DIA program to evaluate the value of the symbol
+
+		CV_LVAR_ADDR_RANGE range;   // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0]; // The value is not available in following gaps. 
+#endif
+	} range_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_SUBFIELD */
+
+		unsigned long   program;    // DIA program to evaluate the value of the symbol
+
+		unsigned long   offParent;  // Offset in parent variable.
+
+		CV_LVAR_ADDR_RANGE range;   // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0];  // The value is not available in following gaps. 
+#endif
+	} range_subfield_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_REGISTER */
+		unsigned short     reg;        // Register to hold the value of the symbol
+		unsigned short     attr;       // Attribute of the register range.
+		//{
+		//	unsigned short  maybe : 1;    // May have no user name on one of control flow path.
+		//}
+		CV_LVAR_ADDR_RANGE range;      // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0];  // The value is not available in following gaps. 
+#endif
+	} range_register_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_FRAMEPOINTER_REL */
+
+		unsigned long    offFramePointer;  // offset to frame pointer
+
+		CV_LVAR_ADDR_RANGE range;   // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0];  // The value is not available in following gaps. 
+#endif
+	} range_stack_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE */
+
+		unsigned long    offFramePointer;  // offset to frame pointer
+	} range_stack_fullscope_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_REGISTER_REL */
+
+		unsigned short  baseReg;         // Register to hold the base pointer of the symbol
+		//unsigned short  spilledUdtMember : 1;   // Spilled member for s.i.
+		//unsigned short  padding : 3;   // Padding for future use.
+		unsigned short  offsetParent /*: 12*/;  // Offset in parent variable. (shift left 4 bits)
+		unsigned long   offBasePointer;  // offset to register
+
+		CV_LVAR_ADDR_RANGE range;   // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0];  // The value is not available in following gaps.
+#endif
+	} range_regrel_v3;
+
+	struct
+	{
+		short int	        len;	        /* Total length of this entry */
+		short int	        id;		/* Always S_DEFRANGE_SUBFIELD_REGISTER */
+
+		unsigned short     reg;        // Register to hold the value of the symbol
+		unsigned short     attr;       // Attribute of the register range.
+		//{
+		//	unsigned short  maybe : 1;    // May have no user name on one of control flow path.
+		//}
+		unsigned long      offParent /*: 12*/;  // Offset in parent variable.
+		//unsigned long      padding : 20;  // Padding for future use.
+		CV_LVAR_ADDR_RANGE range;   // Range of addresses where this program is valid
+#if 0
+		CV_LVAR_ADDR_GAP   gaps[0];  // The value is not available in following gaps. 
+#endif
+	} range_subfield_reg_v3;
+
     struct
     {
         short int               len;
         short int               id;
         unsigned int            offset;
         unsigned short          segment;
-        unsigned char           flags;
+        unsigned char           flags; //CV_PFLAG_*
         struct p_string         p_name;
     } label_v1;
 
@@ -1466,7 +1996,7 @@ union codeview_symbol
         short int               id;
         unsigned int            offset;
         unsigned short          segment;
-        unsigned char           flags;
+        unsigned char           flags; //CV_PFLAG_*
         char                    name[1];
     } label_v3;
 
@@ -1531,34 +2061,61 @@ union codeview_symbol
     {
         short int               len;
         short int               id;
-        char                    signature[4];
-        struct p_string         p_name;
+		unsigned int            signature;
+		struct p_string         p_name;
     } objname_v1;
 
-    struct
-    {
-        short int               len;
-        short int               id;
-        unsigned int            unknown;
-        struct p_string         p_name;
-    } compiland_v1;
+	struct
+	{
+		short int               len;
+		short int               id;
+		unsigned int            signature;
+		char                    name[1];
+	} objname_v3;
 
     struct
     {
         short int               len;
         short int               id;
-        unsigned                unknown1[4];
-        unsigned short          unknown2;
-        struct p_string         p_name;
-    } compiland_v2;
+		unsigned char			machine;	// target processor
+		unsigned char			language;	// language index
+		unsigned short			flags;
+		struct p_string         p_version;	// Length-prefixed compiler version string
+	} compiland_v1;
 
-    struct
-    {
-        short int               len;
-        short int               id;
-        unsigned int            unknown;
-        char                    name[1];
-    } compiland_v3;
+	struct
+	{
+		short int               len;
+		short int               id;
+		unsigned int			flags;
+		unsigned short			machine;    // target processor
+		unsigned short			verFEMajor; // front end major version #
+		unsigned short			verFEMinor; // front end minor version #
+		unsigned short			verFEBuild; // front end build version #
+		unsigned short			verMajor;   // back end major version #
+		unsigned short			verMinor;   // back end minor version #
+		unsigned short			verBuild;   // back end build version #
+		struct p_string			p_version;  // Length-prefixed compiler version string, followed
+											//  by an optional block of zero terminated strings
+											//  terminated with a double zero.
+	} compiland2_v2;
+
+	struct
+	{
+		short int               len;
+		short int               id;
+		unsigned int			flags;
+		unsigned short			machine;    // target processor
+		unsigned short			verFEMajor; // front end major version #
+		unsigned short			verFEMinor; // front end minor version #
+		unsigned short			verFEBuild; // front end build version #
+		unsigned short			verMajor;   // back end major version #
+		unsigned short			verMinor;   // back end minor version #
+		unsigned short			verBuild;   // back end build version #
+		char					version[1]; // Zero terminated compiler version string, followed
+											//  by an optional block of zero terminated strings
+											//  terminated with a double zero.
+	} compiland2_v3;
 
     struct
     {
@@ -1602,22 +2159,26 @@ union codeview_symbol
     {
         short int               len;
         short int               id;
-        unsigned int            offset;
-        unsigned int            unknown;
-    } security_cookie_v3;
+        unsigned int            offset;			// Frame relative offset
+        unsigned short          reg;			// Register index
+		unsigned char			cookietype;		// Type of the cookie
+		unsigned char			flags;			// Flags describing this cookie
+	} security_cookie_v3;
 
     struct
     {
         short int               len;
         short int               id;
-        unsigned int            sz_frame;       /* size of frame */
-        unsigned int            unknown2;
-        unsigned int            unknown3;
-        unsigned int            sz_saved_regs;  /* size of saved registers from callee */
+        unsigned int            cb_frame;       /* count of bytes of total frame */
+        unsigned int            cb_pad;			/* count of bytes of padding in the frame */
+        unsigned int            offpad;			/* offset (relative to frame pointer) padding*/
+        unsigned int            cb_saved_regs;  /* count of bytes of saved registers from callee */
         unsigned int            eh_offset;      /* offset for exception handler */
         unsigned short          eh_sect;        /* section for exception handler */
-        unsigned int            flags;
-    } frame_info_v2;
+        unsigned int            flags;			/* CV_FIFLAG */
+		// hasAlloca,hasSetjmp,hasLongjmp,hasInlAsm,hasEH,inl_specified,hasSEH,naked,hasGsChecks,hasEHa,noStackOrdering,wasInlined,strictGsCheck
+		// return UDT,instance constructor,instance constructor with virtual base
+	} frame_info_v2;
 
     struct
     {
@@ -1631,14 +2192,28 @@ union codeview_symbol
 
 	struct
 	{
-        short int               len;
-        short int               id;
-		unsigned short int      sizeLocals;  // sum of size of locals and arguments
-		unsigned short int      unknown[10];
-		unsigned short int      info;        // hasAlloca,hasSetjmp,hasLongjmp,hasInlAsm,hasEH,inl_specified,hasSEH,naked,hasGsChecks,hasEHa,noStackOrdering,wasInlined,strictGsCheck
-		// return UDT,instance constructor,instance constructor with virtual base
-		unsigned int            unknown2;
-	} funcinfo_32;
+		short int               len;
+		short int               id;
+		unsigned int			flags;
+		unsigned short			machine;    // target processor
+		unsigned short			verFEMajor; // front end major version #
+		unsigned short			verFEMinor; // front end minor version #
+		unsigned short			verFEBuild; // front end build version #
+		unsigned short			verFEQFE;   // front end QFE version #
+		unsigned short			verMajor;   // back end major version #
+		unsigned short			verMinor;   // back end minor version #
+		unsigned short			verBuild;   // back end build version #
+		unsigned short			verQFE;     // back end QFE version #
+		char					version[1]; // Zero terminated compiler version string
+	} ms_compiland3_v3;
+
+	struct
+	{
+		short int               len;
+		short int               id;
+		unsigned char           flags;
+		unsigned char			rgsz[1];    // Sequence of zero-terminated strings
+	} ms_toolenv_v3;
 };
 
 #define S_COMPILAND_V1  0x0001
@@ -1693,9 +2268,9 @@ union codeview_symbol
 #define S_LTHREAD_V2    0x100e
 #define S_GTHREAD_V2    0x100f
 #define S_FRAMEINFO_V2  0x1012
-#define S_COMPILAND_V2  0x1013
+#define S_COMPILAND2_V2 0x1013
 
-#define S_COMPILAND_V3  0x1101
+#define S_OBJNAME_V3	0x1101
 #define S_THUNK_V3      0x1102
 #define S_BLOCK_V3      0x1103
 #define S_LABEL_V3      0x1105
@@ -1711,15 +2286,413 @@ union codeview_symbol
 #define S_REGREL_V3     0x1111
 #define S_LTHREAD_V3    0x1112
 #define S_GTHREAD_V3    0x1113
-#define S_MSTOOL_V3     0x1116  /* compiler command line options and build information */
+#define S_COMPILAND2_V3 0x1116  /* compiler command line options and build information */
 #define S_PUB_FUNC1_V3  0x1125  /* didn't get the difference between the two */
 #define S_PUB_FUNC2_V3  0x1127
+#define S_LOCAL_V2		0x1133  /* defines a local symbol in optimized code */
+#define S_DEFRANGE_V2	0x1134  /* defines a single range of addresses in which symbol can be evaluated */
+#define S_DEFRANGE2_V2	0x1135 /* defines ranges of addresses in which symbol can be evaluated */
 #define S_SECTINFO_V3   0x1136
 #define S_SUBSECTINFO_V3 0x1137
 #define S_ENTRYPOINT_V3 0x1138
 #define S_SECUCOOKIE_V3 0x113A
-#define S_MSTOOLINFO_V3 0x113C
-#define S_MSTOOLENV_V3  0x113D
+#define S_COMPILAND3_V3	0x113C	/* compiler command line options and build information */
+#define S_MSTOOLENV_V3  0x113D	/* environment block split of S_COMPILAND2_V3 */
+#define S_LOCAL_V3		0x113e	/* defines a local symbol in optimized code */
+#define S_DEFRANGE_V3	0x113f	/* defines a single range of addresses in which symbol can be evaluated */
+#define S_DEFRANGE_SUBFIELD_V3	0x1140       /* ranges for a subfield */
+
+#define S_DEFRANGE_REGISTER_V3	0x1141       /* ranges for en-registered symbol */
+#define S_DEFRANGE_FRAMEPOINTER_REL_V3	0x1142   /* range for stack symbol. */
+#define S_DEFRANGE_SUBFIELD_REGISTER_V3 0x1143  /* ranges for en-registered field of symbol */
+#define S_DEFRANGE_FRAMEPOINTER_REL_FULL_SCOPE_V3 0x1144 /* range for stack symbol span valid full scope of function body, gap might apply. */
+#define S_DEFRANGE_REGISTER_REL_V3 0x1145 /* range for symbol address as register + offset. */
+
+// S_PROC symbols that reference ID instead of type
+#define S_LPROC32_ID	0x1146
+#define S_GPROC32_ID	0x1147
+#define S_LPROCMIPS_ID	0x1148
+#define S_GPROCMIPS_ID	0x1149
+#define S_LPROCIA64_ID	0x114a
+#define S_GPROCIA64_ID	0x114b
+
+#define S_BUILDINFO		0x114c /* build information. */
+#define S_INLINESITE	0x114d /* inlined function callsite. */
+#define S_INLINESITE_END	0x114e
+#define S_PROC_ID_END	0x114f
+
+/* procedure symbol flags */
+#define CV_PFLAG_NOFPO		0x01 /* frame pointer present */
+#define CV_PFLAG_INT		0x02 /* interrupt return */
+#define CV_PFLAG_FAR		0x04 /* far return */
+#define CV_PFLAG_NEVER		0x08 /* function does not return */
+#define CV_PFLAG_NOTREACHED	0x10 /* label isn't fallen into */
+#define CV_PFLAG_CUST_CALL	0x20 /* custom calling convention */
+#define CV_PFLAG_NOINLINE	0x40 /* function marked as noinline */
+#define CV_PFLAG_OPTDBGINFO	0x80 /* function has debug information for optimized code */
+
+/* frame info flags and masks */
+#define CV_FIFLAG_HasAlloca		0x000001   /* function uses _alloca() */
+#define CV_FIFLAG_HasSetJmp		0x000002   /* function uses setjmp() */
+#define CV_FIFLAG_HasLongJmp	0x000004   /* function uses longjmp() */
+#define CV_FIFLAG_HasInlAsm		0x000008   /* function uses inline asm */
+#define CV_FIFLAG_HasEH			0x000010   /* function has EH states */
+#define CV_FIFLAG_InlSpec		0x000020   /* function was speced as inline */
+#define CV_FIFLAG_HasSEH		0x000040   /* function has SEH */
+#define CV_FIFLAG_Naked			0x000080   /* function is __declspec(naked) */
+#define CV_FIFLAG_SecurityChecks   0x000100  /* function has buffer security check introduced by /GS. */
+#define CV_FIFLAG_AsyncEH		0x000200   /* function compiled with /EHa */
+#define CV_FIFLAG_GSNoStackOrdering   0x000400   // function has /GS buffer checks, but stack ordering couldn't be done */
+#define CV_FIFLAG_WasInlined	0x000800   /* function was inlined within another function */
+#define CV_FIFLAG_GSCheck		0x001000   /* function is __declspec(strict_gs_check) */
+#define CV_FIFLAG_SafeBuffers	0x002000   /* function is __declspec(safebuffers) */
+#define CV_FIMASK_encodedLocalBasePointer  0x00C000  /* record function's local pointer explicitly. */
+#define CV_FIMASK_encodedParamBasePointer  0x030000  /* record function's parameter pointer explicitly. */
+#define CV_FIVALUE_encodedLocalBasePointer(reg) (((reg)&3) << 14)
+#define CV_FIVALUE_encodedParamBasePointer(reg) (((reg)&3) << 16)
+#define CV_FIFLAG_PogoOn		0x040000   /* function was compiled with PGO/PGU */
+#define CV_FIFLAG_ValidCounts	0x080000   /* Do we have valid Pogo counts? */
+#define CV_FIFLAG_OptSpeed		0x100000   /* Did we optimize for speed? */
+#define CV_FIFLAG_GuardCF		0x200000   /* function contains CFG checks (and no write checks) */
+#define CV_FIFLAG_GuardCFW		0x400000   /* function contains CFW checks and/or instrumentation */
+
+#define CV_LVARFLAGS_fIsParam			0x001 /* variable is a parameter */
+#define CV_LVARFLAGS_fAddrTaken			0x002 /* address is taken */
+#define CV_LVARFLAGS_fCompGenx			0x004 /* variable is compiler generated */
+#define CV_LVARFLAGS_fIsAggregate		0x008 /* the symbol is splitted in temporaries,
+												  which are treated by compiler as 
+												  independent entities */
+#define CV_LVARFLAGS_fIsAggregated		0x010 /* Counterpart of fIsAggregate - tells
+												  that it is a part of a fIsAggregate symbol */
+#define CV_LVARFLAGS_fIsAliased			0x020 /* variable has multiple simultaneous lifetimes */
+#define CV_LVARFLAGS_fIsAlias			0x040 /* represents one of the multiple simultaneous lifetimes */
+#define CV_LVARFLAGS_fIsRetValue		0x080 /* represents a function return value */
+#define CV_LVARFLAGS_fIsOptimizedOut	0x100 /* variable has no lifetimes */
+#define CV_LVARFLAGS_fIsEnregGlob		0x200 /* variable is an enregistered global */
+#define CV_LVARFLAGS_fIsEnregStat		0x400 /* variable is an enregistered static */
+
+
+// Frame cookie information
+#define CV_COOKIETYPE_COPY		0
+#define CV_COOKIETYPE_XOR_SP	1
+#define CV_COOKIETYPE_XOR_BP	2
+#define CV_COOKIETYPE_XOR_R13	3
+
+/* compile flags and masks */
+#define CV_CFL_PCODE		0x001
+#define CV_CFL_FLOATPREC	0x006
+#define CV_CFL_FLOATPKG		0x018
+#define CV_CFL_AMBDATA		0x0E0
+#define CV_CFL_AMBCODE		0x700
+#define CV_CFL_MODE32		0x800
+
+/* data models */
+#define CV_CFL_DNEAR		0x00
+#define CV_CFL_DFAR 		0x20
+#define CV_CFL_DHUGE		0x40
+
+/* code models */
+#define CV_CFL_CNEAR		0x000
+#define CV_CFL_CFAR 		0x100
+#define CV_CFL_CHUGE		0x200
+
+/* floating point packages */
+#define CV_CFL_NDP			0x00
+#define CV_CFL_EMU			0x08
+#define CV_CFL_ALT			0x10
+
+/* languages */
+#define CV_CFL_C			0x00
+#define CV_CFL_CXX			0x01
+#define CV_CFL_FORTRAN		0x02
+#define CV_CFL_MASM			0x03
+#define CV_CFL_PASCAL		0x04
+#define CV_CFL_BASIC		0x05
+#define CV_CFL_COBOL		0x06
+#define CV_CFL_LINK			0x07
+#define CV_CFL_CVTRES		0x08
+#define CV_CFL_CVTPGD		0x09
+#define CV_CFL_CSHARP		0x0A  /* C# */
+#define CV_CFL_VB			0x0B  /* Visual Basic */
+#define CV_CFL_ILASM		0x0C  /* IL (as in CLR) ASM */
+#define CV_CFL_JAVA			0x0D
+#define CV_CFL_JSCRIPT		0x0E
+#define CV_CFL_MSIL			0x0F  /* Unknown MSIL (LTCG of .NETMODULE) */
+#define CV_CFL_HLSL			0x10  /* High Level Shader Language */
+
+/* machines */
+#define CV_CFL_8080         0x00
+#define CV_CFL_8086         0x01
+#define CV_CFL_80286        0x02
+#define CV_CFL_80386        0x03
+#define CV_CFL_80486        0x04
+#define CV_CFL_PENTIUM      0x05
+#define CV_CFL_PENTIUMII    0x06
+#define CV_CFL_PENTIUMPRO   CV_CFL_PENTIUMII
+#define CV_CFL_PENTIUMIII   0x07
+#define CV_CFL_MIPS         0x10
+#define CV_CFL_MIPSR4000    CV_CFL_MIPS  /* don't break current code */
+#define CV_CFL_MIPS16       0x11
+#define CV_CFL_MIPS32       0x12
+#define CV_CFL_MIPS64       0x13
+#define CV_CFL_MIPSI        0x14
+#define CV_CFL_MIPSII       0x15
+#define CV_CFL_MIPSIII      0x16
+#define CV_CFL_MIPSIV       0x17
+#define CV_CFL_MIPSV        0x18
+#define CV_CFL_M68000       0x20
+#define CV_CFL_M68010       0x21
+#define CV_CFL_M68020       0x22
+#define CV_CFL_M68030       0x23
+#define CV_CFL_M68040       0x24
+#define CV_CFL_ALPHA        0x30
+#define CV_CFL_ALPHA_21064  0x30
+#define CV_CFL_ALPHA_21164  0x31
+#define CV_CFL_ALPHA_21164A 0x32
+#define CV_CFL_ALPHA_21264  0x33
+#define CV_CFL_ALPHA_21364  0x34
+#define CV_CFL_PPC601       0x40
+#define CV_CFL_PPC603       0x41
+#define CV_CFL_PPC604       0x42
+#define CV_CFL_PPC620       0x43
+#define CV_CFL_PPCFP        0x44
+#define CV_CFL_PPCBE        0x45
+#define CV_CFL_SH3          0x50
+#define CV_CFL_SH3E         0x51
+#define CV_CFL_SH3DSP       0x52
+#define CV_CFL_SH4          0x53
+#define CV_CFL_SHMEDIA      0x54
+#define CV_CFL_ARM3         0x60
+#define CV_CFL_ARM4         0x61
+#define CV_CFL_ARM4T        0x62
+#define CV_CFL_ARM5         0x63
+#define CV_CFL_ARM5T        0x64
+#define CV_CFL_ARM6         0x65
+#define CV_CFL_ARM_XMAC     0x66
+#define CV_CFL_ARM_WMMX     0x67
+#define CV_CFL_ARM7         0x68
+#define CV_CFL_OMNI         0x70
+#define CV_CFL_IA64         0x80
+#define CV_CFL_IA64_1       0x80
+#define CV_CFL_IA64_2       0x81
+#define CV_CFL_CEE          0x90
+#define CV_CFL_AM33         0xA0
+#define CV_CFL_M32R         0xB0
+#define CV_CFL_TRICORE      0xC0
+#define CV_CFL_X64          0xD0
+#define CV_CFL_AMD64        CV_CFL_X64
+#define CV_CFL_EBC          0xE0
+#define CV_CFL_THUMB        0xF0
+#define CV_CFL_ARMNT        0xF4
+#define CV_CFL_ARM64        0xF6
+#define CV_CFL_D3D11_SHADER 0x100
+
+#define CV_COMPILEMASK_LANGUAGE       0x000FF
+#define CV_COMPILEFLAG_EC             0x00100
+#define CV_COMPILEFLAG_NODBGINFO      0x00200
+#define CV_COMPILEFLAG_LTCG           0x00400
+#define CV_COMPILEFLAG_NODATAALIGN    0x00800
+#define CV_COMPILEFLAG_MANAGEDPRESENT 0x01000
+#define CV_COMPILEFLAG_SECURITYCHECKS 0x02000
+#define CV_COMPILEFLAG_HOTPATCH       0x04000
+#define CV_COMPILEFLAG_CVTCIL         0x08000
+#define CV_COMPILEFLAG_MSILMODULE     0x10000
+#define CV_COMPILEFLAG_SDL            0x20000
+#define CV_COMPILEFLAG_PGO            0x40000
+#define CV_COMPILEFLAG_EXP            0x80000
+
+#define CV_PUBSYMFLAGS_cvpsfNone		0
+#define CV_PUBSYMFLAGS_cvpsfCode		0x00000001
+#define CV_PUBSYMFLAGS_cvpsfFunction	0x00000002
+#define CV_PUBSYMFLAGS_cvpsfManaged		0x00000004
+#define CV_PUBSYMFLAGS_cvpsfMSIL		0x00000008
+
+#define CV_SEGDESCFLAGS_read			0x0001
+#define CV_SEGDESCFLAGS_write			0x0002
+#define CV_SEGDESCFLAGS_execute			0x0004
+#define CV_SEGDESCFLAGS_reserved1		0x0008
+#define CV_SEGDESCFLAGS_reserved2		0x0010
+#define CV_SEGDESCFLAGS_reserved3		0x0020
+#define CV_SEGDESCFLAGS_reserved4		0x0040
+#define CV_SEGDESCFLAGS_reserved5		0x0080
+#define CV_SEGDESCFLAGS_reserved6		0x0100
+#define CV_SEGDESCFLAGS_reserved7		0x0200
+#define CV_SEGDESCFLAGS_reserved8		0x0400
+#define CV_SEGDESCFLAGS_reserved9		0x0800
+#define CV_SEGDESCFLAGS_reserved10		0x1000
+#define CV_SEGDESCFLAGS_reserved11		0x2000
+#define CV_SEGDESCFLAGS_reserved12		0x4000
+#define CV_SEGDESCFLAGS_reserved13		0x8000
+
+#define THUNK_ORDINAL_NOTYPE		0	/* standard thunk */
+#define THUNK_ORDINAL_ADJUSTOR		1	/* "this" adjustor thunk */
+#define THUNK_ORDINAL_VCALL			2	/* virtual call thunk */
+#define THUNK_ORDINAL_PCODE			3	/* pcode thunk */
+#define THUNK_ORDINAL_LOAD			4	/* thunk which loads the address to jump to */
+										//  via unknown means...
+
+ // trampoline thunk ordinals   - only for use in Trampoline thunk symbols
+ #define THUNK_ORDINAL_TRAMP_INCREMENTAL	5
+ #define THUNK_ORDINAL_TRAMP_BRANCHISLAND	6
+
+
+// BinaryAnnotations ::= BinaryAnnotationInstruction+
+// BinaryAnnotationInstruction ::= BinaryAnnotationOpcode Operand+
+//
+// The binary annotation mechanism supports recording a list of annotations
+// in an instruction stream.  The X64 unwind code and the DWARF standard have
+// similar design.
+//
+// One annotation contains opcode and a number of 32bits operands.
+//
+// The initial set of annotation instructions are for line number table
+// encoding only.  These annotations append to S_INLINESITE record, and
+// operands are unsigned except for BA_OP_ChangeLineOffset.
+
+enum BinaryAnnotationOpcode
+{
+	BA_OP_Invalid,               // link time pdb contains PADDINGs
+	BA_OP_CodeOffset,            // param : start offset 
+	BA_OP_ChangeCodeOffsetBase,  // param : nth separated code chunk (main code chunk == 0)
+	BA_OP_ChangeCodeOffset,      // param : delta of offset
+	BA_OP_ChangeCodeLength,      // param : length of code, default next start
+	BA_OP_ChangeFile,            // param : fileId 
+	BA_OP_ChangeLineOffset,      // param : line offset (signed)
+	BA_OP_ChangeLineEndDelta,    // param : how many lines, default 1
+	BA_OP_ChangeRangeKind,       // param : either 1 (default, for statement)
+								 //         or 0 (for expression)
+
+	BA_OP_ChangeColumnStart,     // param : start column number, 0 means no column info
+	BA_OP_ChangeColumnEndDelta,  // param : end column number delta (signed)
+
+	// Combo opcodes for smaller encoding size.
+
+	BA_OP_ChangeCodeOffsetAndLineOffset,  // param : ((sourceDelta << 4) | CodeDelta)
+	BA_OP_ChangeCodeLengthAndCodeOffset,  // param : codeLength, codeOffset
+
+	BA_OP_ChangeColumnEnd,       // param : end column number
+};
+
+inline int BinaryAnnotationInstructionOperandCount(BinaryAnnotationOpcode op)
+{
+	return (op == BA_OP_ChangeCodeLengthAndCodeOffset) ? 2 : 1;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// This routine a simplified variant from cor.h.
+//
+// Compress an unsigned integer (iLen) and store the result into pDataOut.
+//
+// Return value is the number of bytes that the compressed data occupies.  It
+// is caller's responsibilityt to ensure *pDataOut has at least 4 bytes to be
+// written to.
+//
+// Note that this function returns -1 if iLen is too big to be compressed.
+// We currently can only encode numbers no larger than 0x1FFFFFFF.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+inline unsigned int CVCompressData(
+	unsigned int  iLen,       // [IN]  given uncompressed data
+	void *  pDataOut)   // [OUT] buffer for the compressed data
+{
+	byte *pBytes = reinterpret_cast<byte *>(pDataOut);
+
+	if (iLen <= 0x7F) {
+		*pBytes = byte(iLen);
+		return 1;
+	}
+
+	if (iLen <= 0x3FFF) {
+		*pBytes = byte((iLen >> 8) | 0x80);
+		*(pBytes + 1) = byte(iLen & 0xff);
+		return 2;
+	}
+
+	if (iLen <= 0x1FFFFFFF) {
+		*pBytes = byte((iLen >> 24) | 0xC0);
+		*(pBytes + 1) = byte((iLen >> 16) & 0xff);
+		*(pBytes + 2) = byte((iLen >> 8) & 0xff);
+		*(pBytes + 3) = byte(iLen & 0xff);
+		return 4;
+	}
+
+	return (unsigned int)-1;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// Uncompress the data in pData and store the result into pDataOut.
+//
+// Return value is the uncompressed unsigned integer.  pData is incremented to
+// point to the next piece of uncompressed data.
+// 
+// Returns -1 if what is passed in is incorrectly compressed data, such as
+// (*pBytes & 0xE0) == 0xE0.
+//
+///////////////////////////////////////////////////////////////////////////////
+
+inline unsigned int CVUncompressData(
+	byte* & pData)    // [IN,OUT] compressed data 
+{
+	unsigned int res = (unsigned int)(-1);
+
+	if ((*pData & 0x80) == 0x00) {
+		// 0??? ????
+
+		res = (unsigned int)(*pData++);
+	}
+	else if ((*pData & 0xC0) == 0x80) {
+		// 10?? ????
+
+		res = (unsigned int)((*pData++ & 0x3f) << 8);
+		res |= *pData++;
+	}
+	else if ((*pData & 0xE0) == 0xC0) {
+		// 110? ???? 
+
+		res = (*pData++ & 0x1f) << 24;
+		res |= *pData++ << 16;
+		res |= *pData++ << 8;
+		res |= *pData++;
+	}
+
+	return res;
+}
+
+// Encode smaller absolute numbers with smaller buffer.
+//
+// General compression only work for input < 0x1FFFFFFF 
+// algorithm will not work on 0x80000000 
+
+inline unsigned __int32 EncodeSignedInt32(__int32 input)
+{
+	unsigned __int32 rotatedInput;
+
+	if (input >= 0) {
+		rotatedInput = input << 1;
+	}
+	else {
+		rotatedInput = ((-input) << 1) | 1;
+	}
+
+	return rotatedInput;
+}
+
+inline __int32 DecodeSignedInt32(unsigned __int32 input)
+{
+	__int32 rotatedInput;
+
+	if (input & 1) {
+		rotatedInput = -(int)(input >> 1);
+	}
+	else {
+		rotatedInput = input >> 1;
+	}
+
+	return rotatedInput;
+}
 
 /* ======================================== *
  *          Line number information
@@ -1741,6 +2714,30 @@ struct startend
 
 #define LT2_LINES_BLOCK 0x000000f2
 #define LT2_FILES_BLOCK 0x000000f4
+
+#define DEBUG_S_IGNORE	0x80000000    // if this bit is set in a subsection type then ignore the subsection contents
+
+#define DEBUG_S_SYMBOLS				0x000000f1
+#define DEBUG_S_LINES				0x000000f2
+#define DEBUG_S_STRINGTABLE			0x000000f3
+#define DEBUG_S_FILECHKSMS			0x000000f4
+#define DEBUG_S_FRAMEDATA			0x000000f5
+#define DEBUG_S_INLINEELINES		0x000000f6
+#define DEBUG_S_CROSSSCOPEIMPORTS	0x000000f7
+#define DEBUG_S_CROSSSCOPEEXPORTS	0x000000f8
+
+#define DEBUG_S_IL_LINES			0x000000f9
+#define DEBUG_S_FUNC_MDTOKEN_MAP	0x000000fa
+#define DEBUG_S_TYPE_MDTOKEN_MAP	0x000000fb
+#define DEBUG_S_MERGED_ASSEMBLYINPUT	0x000000fc
+
+#define DEBUG_S_COFF_SYMBOL_RVA		0x000000fd
+
+struct codeview_subsection_header
+{
+	DWORD type;
+	long  cbLen;
+};
 
 /* there's a new line tab structure from MS Studio 2005 and after
  * it's made of a list of codeview_linetab2 blocks.

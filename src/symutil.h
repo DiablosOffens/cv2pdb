@@ -28,10 +28,11 @@ int pstrcmp(const BYTE* p1, const BYTE* p2);
 bool p2ccmp(const BYTE* pp, const char* cp);
 bool p2ccmp(const p_string& pp, const char* cp);
 int pstrcpy_v(bool v3, BYTE* d, const BYTE* s);
-int cstrcpy_v(bool v3, BYTE* d, const char* s);
+int cstrcpy_v(bool v3, BYTE* d, const char* s, bool replacedot = true);
 bool dstrcmp(const BYTE* s1, bool cstr1, const BYTE* s2, bool cstr2);
 
-extern char dotReplacementChar;
+extern char dotReplacementChar[4];
+extern size_t cbDotReplacementChar;
 extern bool demangleSymbols;
 extern bool useTypedefEnum;
 

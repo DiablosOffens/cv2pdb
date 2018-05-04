@@ -38,7 +38,17 @@ static const int kPropHasOverAsgn = 0x20;
 static const int kPropHasCasting  = 0x40;
 static const int kPropIncomplete  = 0x80;
 static const int kPropScoped      = 0x100;
-static const int kPropReserved2   = 0x200;
+static const int kPropHasUniqueName = 0x200;
+static const int kPropIsSealed		= 0x400;
+static const int kPropHFA_none		= 0x000;
+static const int kPropHFA_float		= 0x800;
+static const int kPropHFA_double	= 0x1000;
+static const int kPropHFA_other		= 0x1800;
+static const int kPropIsIntrinsic	= 0x2000;
+static const int kPropMoCOM_none	= 0x0000;
+static const int kPropMoCOM_ref		= 0x4000;
+static const int kPropMoCOM_value	= 0x8000;
+static const int kPropMoCOM_interface = 0xC000;
 
 bool isStruct(const codeview_type* cvtype);
 bool isClass(const codeview_type* cvtype);
@@ -49,7 +59,7 @@ bool isCompleteStruct(const codeview_type* type, const BYTE* name, bool cstr);
 const BYTE* getStructName(const codeview_type* cvtype, bool &cstr);
 bool cmpStructName(const codeview_type* cvtype, const BYTE* name, bool cstr);
 
-int numeric_leaf(int* value, const void* leaf);
-int write_numeric_leaf(int value, void* leaf);
+int numeric_leaf(long long* value, const void* leaf);
+int write_numeric_leaf(long long value, void* leaf);
 
 #endif // __CVUTIL_H__

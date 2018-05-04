@@ -12,6 +12,7 @@
 
 HMODULE modMsPdb;
 mspdb::fnPDBOpen2W *pPDBOpen2W;
+mspdb::fnopenNameMap *popenNameMap;
 
 char* mspdb80_dll = "mspdb80.dll";
 char* mspdb100_dll = "mspdb100.dll";
@@ -89,8 +90,13 @@ bool tryLoadMsPdb(const char* version, const char* mspdb, const char* path = 0)
 #define BIN_DIR_LT_VS12 0
 #endif
 
+#define WANTPDBVERSION(x) (mspdb::vsVersion == (x) || mspdb::vsVersion == -1)
+
 void tryLoadMsPdb80(bool throughPath)
 {
+	if (modMsPdb || !(WANTPDBVERSION(8) || WANTPDBVERSION(9)))
+		return;
+
 	if (!modMsPdb && throughPath)
 		tryLoadLibrary(mspdb80_dll);
 
@@ -106,7 +112,7 @@ void tryLoadMsPdb80(bool throughPath)
 
 void tryLoadMsPdb100(bool throughPath)
 {
-	if (!modMsPdb)
+	if (!modMsPdb && WANTPDBVERSION(10))
 	{
 		if(throughPath)
 			modMsPdb = LoadLibraryA(mspdb100_dll);
@@ -121,7 +127,7 @@ void tryLoadMsPdb100(bool throughPath)
 
 void tryLoadMsPdb110(bool throughPath)
 {
-	if (!modMsPdb)
+	if (!modMsPdb && WANTPDBVERSION(11))
 	{
 		if (throughPath)
 			modMsPdb = LoadLibraryA(mspdb110_dll);
@@ -136,7 +142,7 @@ void tryLoadMsPdb110(bool throughPath)
 
 void tryLoadMsPdb120(bool throughPath)
 {
-	if (!modMsPdb)
+	if (!modMsPdb && WANTPDBVERSION(12))
 	{
 		if(throughPath)
 			modMsPdb = LoadLibraryA(mspdb120_dll);
@@ -151,7 +157,7 @@ void tryLoadMsPdb120(bool throughPath)
 
 void tryLoadMsPdb140(bool throughPath)
 {
-	if (!modMsPdb)
+	if (!modMsPdb && WANTPDBVERSION(14))
 	{
 		if(throughPath)
 			modMsPdb = LoadLibraryA(mspdb140_dll);
@@ -198,6 +204,11 @@ bool initMsPdb()
 		pPDBOpen2W = (mspdb::fnPDBOpen2W*) GetProcAddress(modMsPdb, "PDBOpen2W");
 	if (!pPDBOpen2W)
 		return false;
+	if(!popenNameMap)
+		popenNameMap = (mspdb::fnopenNameMap*) GetProcAddress(modMsPdb, "?open@NameMap@@SAHPAUPDB@@HPAPAU1@@Z");
+	//TODO: uncomment if we need support for name maps
+	//if (!popenNameMap)
+	//	return false;
 
 	return true;
 }
@@ -211,16 +222,72 @@ bool exitMsPdb()
 	return true;
 }
 
+// https://github.com/Microsoft/microsoft-pdb/blob/master/langapi/include/pdb.h
+#define pdbFSCompress           "C"
+#define pdbVC120                "L"
+#define pdbTypeAppend           "a"
+#define pdbGetRecordsOnly       "c"
+#define pdbFullBuild            "f"
+#define pdbGetTiOnly            "i"
+#define pdbNoTypeMergeLink      "l"
+#define pdbTypeMismatchesLink   "m"
+#define pdbNewNameMap           "n"
+#define pdbMinimalLink          "o"
+#define pdbRead                 "r"
+#define pdbWriteShared          "s"
+#define pdbCTypes               "t"
+#define pdbWrite                "w"
+#define pdbExclusive            "x"
+#define pdbRepro                "z"
+
 mspdb::PDB* CreatePDB(const wchar_t* pdbname)
 {
 	if (!initMsPdb ())
 		return 0;
 
 	mspdb::PDB* pdb = 0;
-	long data[194] = { 193, 0 };
-	wchar_t ext[256] = L".exe";
-	if (!((*pPDBOpen2W) (pdbname, "wf", data, ext, 0x400, &pdb)))
+	long ec = 0;
+	wchar_t exmsg[256] = L"";
+	if (!((*pPDBOpen2W) (pdbname, pdbWrite pdbFullBuild, &ec, exmsg, ARRAYSIZE(exmsg), &pdb)))
 		return 0;
 
 	return pdb;
+}
+
+mspdb::PDB* OpenPDB(const wchar_t* pdbname)
+{
+	if (!initMsPdb())
+		return 0;
+
+	mspdb::PDB* pdb = 0;
+	long ec = 0;
+	wchar_t exmsg[256] = L"";
+	if (!((*pPDBOpen2W) (pdbname, pdbRead pdbFullBuild, &ec, exmsg, ARRAYSIZE(exmsg), &pdb)))
+		return 0;
+
+	return pdb;
+}
+
+mspdb::NameMap* CreateNameMap(mspdb::PDB* pdb)
+{
+	if (!initMsPdb())
+		return 0;
+
+	mspdb::NameMap* namemap = 0;
+	if (!((*popenNameMap) (pdb, TRUE, &namemap)))
+		return 0;
+
+	return namemap;
+}
+
+mspdb::NameMap* OpenNameMap(mspdb::PDB* pdb)
+{
+	if (!initMsPdb())
+		return 0;
+
+	mspdb::NameMap* namemap = 0;
+	if (!((*popenNameMap) (pdb, FALSE, &namemap)))
+		return 0;
+
+	return namemap;
 }

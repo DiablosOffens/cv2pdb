@@ -37,6 +37,9 @@
     <ClCompile Include="dwarflines.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="utf8.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cv2pdb.h">
@@ -70,6 +73,12 @@
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="dcvinfo.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="go.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="utf8.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

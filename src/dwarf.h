@@ -223,6 +223,13 @@ extern "C" {
 #define DW_FORM_flag_present            0x19 /* DWARF4 */
 /* 0x1a thru 0x1f were left unused accidentally. Reserved for future use. */
 #define DW_FORM_ref_sig8                0x20 /* DWARF4 */
+/* Extensions for Fission.  See http://gcc.gnu.org/wiki/DebugFission.  */
+#define DW_FORM_GNU_addr_index			0x1f01
+#define DW_FORM_GNU_str_index			0x1f02
+/* Extensions for DWZ multifile.
+See http://www.dwarfstd.org/ShowIssue.php?issue=120604.1&type=open .  */
+#define DW_FORM_GNU_ref_alt				0x1f20
+#define DW_FORM_GNU_strp_alt			0x1f21
 
 #define DW_AT_sibling                           0x01
 #define DW_AT_location                          0x02
@@ -321,6 +328,7 @@ extern "C" {
 #define DW_AT_const_expr                        0x6c /* DWARF4 */
 #define DW_AT_enum_class                        0x6d /* DWARF4 */
 #define DW_AT_linkage_name                      0x6e /* DWARF4 */
+#define DW_AT_noreturn							0x87 /* DWARF5 */
 
 /* In extensions, we attempt to include the vendor extension
    in the name even when the vendor leaves it out. */
@@ -411,6 +419,18 @@ extern "C" {
 #define DW_AT_GNU_all_call_sites                0x2117 /* GNU */
 #define DW_AT_GNU_all_source_call_sites         0x2118 /* GNU */
 
+/* Section offset into .debug_macro section.  */
+#define DW_AT_GNU_macros						0x2119
+/* Attribute for C++ deleted special member functions (= delete;).  */
+#define DW_AT_GNU_deleted						0x211a
+
+/* Extensions for Fission.  See http://gcc.gnu.org/wiki/DebugFission.  */
+#define DW_AT_GNU_dwo_name						0x2130 /* GNU */
+#define DW_AT_GNU_dwo_id						0x2131 /* GNU */
+#define DW_AT_GNU_ranges_base					0x2132 /* GNU */
+#define DW_AT_GNU_addr_base						0x2133 /* GNU */
+#define DW_AT_GNU_pubnames						0x2134 /* GNU */
+#define DW_AT_GNU_pubtypes						0x2135 /* GNU */
 
 
 /* ALTIUM extension: ALTIUM Compliant location lists (flag) */
@@ -468,6 +488,11 @@ extern "C" {
 /*   See http://gcc.gnu.org/wiki/DW_AT_GNAT_descriptive_type .  */
 #define DW_AT_use_GNAT_descriptive_type         0x2301 /* GNAT */
 #define DW_AT_GNAT_descriptive_type             0x2302 /* GNAT */
+
+/*   See https://golang.org/src/cmd/link/internal/ld/dwarf.go */
+#define DW_AT_go_kind							0x2900 /* go */
+#define DW_AT_go_key							0x2901 /* go */
+#define DW_AT_go_elem							0x2902 /* go */
 
 /* UPC extension */
 #define DW_AT_upc_threads_scaled                0x3210 /* UPC */
@@ -654,15 +679,32 @@ extern "C" {
 
     /* GNU extensions. */
 #define DW_OP_GNU_push_tls_address      0xe0 /* GNU */
-
+		
 /* Follows extension so dwarfdump prints the most-likely-useful name. */
 #define DW_OP_lo_user                   0xe0
 
 
+/* The following is for marking variables that are uninitialized.  */
 #define DW_OP_GNU_uninit                0xf0 /* GNU */
 #define DW_OP_GNU_encoded_addr          0xf1 /* GNU */
+/* The GNU implicit pointer extension.
+See http://www.dwarfstd.org/ShowIssue.php?issue=100831.1&type=open .  */
 #define DW_OP_GNU_implicit_pointer      0xf2 /* GNU */
+/* The GNU entry value extension.
+See http://www.dwarfstd.org/ShowIssue.php?issue=100909.1&type=open .  */
 #define DW_OP_GNU_entry_value           0xf3 /* GNU */
+/* The GNU typed stack extension.
+See http://www.dwarfstd.org/doc/040408.1.html .  */
+#define DW_OP_GNU_const_type			0xf4 /* GNU */
+#define DW_OP_GNU_regval_type			0xf5 /* GNU */
+#define DW_OP_GNU_deref_type			0xf6 /* GNU */
+#define DW_OP_GNU_convert				0xf7 /* GNU */
+#define DW_OP_GNU_reinterpret			0xf9 /* GNU */
+/* The GNU parameter ref extension.  */
+#define DW_OP_GNU_parameter_ref			0xfa /* GNU */
+/* Extensions for Fission.  See http://gcc.gnu.org/wiki/DebugFission.  */
+#define DW_OP_GNU_addr_index			0xfb /* GNU */
+#define DW_OP_GNU_const_index			0xfc /* GNU */
 
     /* HP extensions. */
 #define DW_OP_HP_unknown                0xe0 /* HP conflict: GNU */
@@ -797,11 +839,23 @@ extern "C" {
    has objected. */
 #define DW_LANG_OpenCL                  0x0015 /* Provisionally DWARF5 */
 #define DW_LANG_Go                      0x0016 /* Provisionally DWARF5 */
+#define DW_LANG_C_plus_plus_11			0x001a /* dwarf5.20141029.pdf DRAFT */
+#define DW_LANG_C11						0x001d /* dwarf5.20141029.pdf DRAFT */
+#define DW_LANG_C_plus_plus_14			0x0021 /* dwarf5.20141029.pdf DRAFT */
+#define DW_LANG_Fortran03				0x0022 /* dwarf5.20141029.pdf DRAFT */
+#define DW_LANG_Fortran08				0x0023 /* dwarf5.20141029.pdf DRAFT */
+
+
 #define DW_LANG_lo_user                 0x8000
 #define DW_LANG_Mips_Assembler          0x8001 /* MIPS   */
 #define DW_LANG_Upc                     0x8765 /* UPC, use
                                         DW_LANG_UPC instead. */
-/* ALTIUM extension */
+#define DW_LANG_HP_Bliss				0x8003 /* HP extensions.  */
+#define DW_LANG_HP_Basic91				0x8004 /* HP extensions.  */
+#define DW_LANG_HP_Pascal91				0x8005 /* HP extensions.  */
+#define DW_LANG_HP_IMacro				0x8006 /* HP extensions.  */
+#define DW_LANG_HP_Assembler			0x8007 /* HP extensions.  */
+		/* ALTIUM extension */
 #define DW_LANG_ALTIUM_Assembler        0x9101  /* ALTIUM */
 
 /* Sun extensions */
@@ -965,12 +1019,15 @@ extern "C" {
 #define DW_EH_PE_sdata2   0x0A  /* GNU */
 #define DW_EH_PE_sdata4   0x0B  /* GNU */
 #define DW_EH_PE_sdata8   0x0C  /* GNU */
+#define DW_EH_PE_signed   0x08  /* GNU */
 
 #define DW_EH_PE_pcrel    0x10  /* GNU */
 #define DW_EH_PE_textrel  0x20  /* GNU */
 #define DW_EH_PE_datarel  0x30  /* GNU */
 #define DW_EH_PE_funcrel  0x40  /* GNU */
 #define DW_EH_PE_aligned  0x50  /* GNU */
+
+#define DW_EH_PE_indirect 0x80  /* GNU */
 
 #define DW_EH_PE_omit     0xff  /* GNU.  Means no value present. */
 

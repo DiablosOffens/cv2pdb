@@ -7,6 +7,7 @@
 #include "PEImage.h"
 #include "cv2pdb.h"
 #include "symutil.h"
+#include "utf8.h"
 
 #include <direct.h>
 
@@ -107,6 +108,7 @@ int T_main(int argc, TCHAR* argv[])
 {
 	double Dversion = 2.043;
 	const TCHAR* pdbref = 0;
+	int vsversion = -1;
 	bool debug = false;
 
 	while (argc > 1 && argv[1][0] == '-')
@@ -126,9 +128,15 @@ int T_main(int argc, TCHAR* argv[])
 		else if (argv[0][1] == 'd' && argv[0][2] == 'e' && argv[0][3] == 'b') // deb[ug]
 			debug = true;
 		else if (argv[0][1] == 's' && argv[0][2])
-			dotReplacementChar = (char)argv[0][2];
+#ifndef UNICODE
+			dotReplacementChar[0] = argv[0][2];
+#else
+			cbDotReplacementChar = UnicodeToUTF8Cch(&argv[0][2], 1, dotReplacementChar, sizeof(dotReplacementChar));
+#endif
 		else if (argv[0][1] == 'p' && argv[0][2])
 			pdbref = argv[0] + 2;
+		else if (argv[0][1] == 'V')
+			vsversion = (int)T_strtod(argv[0] + 2, 0);
 		else
 			fatal("unknown option: " SARG, argv[0]);
 	}
@@ -141,53 +149,87 @@ int T_main(int argc, TCHAR* argv[])
 		printf("License for redistribution is given by the Artistic License 2.0\n");
 		printf("see file LICENSE for further details\n");
 		printf("\n");
-		printf("usage: " SARG " [-Dversion|-C|-n|-e|-sC|-pembedded-pdb] <exe-file> [new-exe-file] [pdb-file]\n", argv[0]);
+		printf("usage: " SARG " [-Dversion|-C|-n|-e|-sC|-pembedded-pdb|-Vversion] <exe-file> [new-exe-file] [pdb-file]\n", argv[0]);
 		return -1;
 	}
-
-	PEImage img;
-	if (!img.loadExe(argv[1]))
-		fatal(SARG ": %s", argv[1], img.getLastError());
-	if (img.countCVEntries() == 0 && !img.hasDWARF())
-		fatal(SARG ": no codeview debug entries found", argv[1]);
-
-	CV2PDB cv2pdb(img);
-	cv2pdb.Dversion = Dversion;
-	cv2pdb.debug = debug;
-	cv2pdb.initLibraries();
 
 	TCHAR* outname = argv[1];
 	if (argc > 2 && argv[2][0])
 		outname = argv[2];
 
-	TCHAR pdbname[260];
+	TCHAR pdbname[MAX_PATH];
 	if (argc > 3)
-		T_strcpy (pdbname, argv[3]);
+		T_strcpy(pdbname, argv[3]);
 	else
 	{
-		T_strcpy (pdbname, outname);
-		TCHAR *pDot = T_strrchr (pdbname, '.');
-		if (!pDot || pDot <= T_strrchr (pdbname, '/') || pDot <= T_strrchr (pdbname, '\\'))
-			T_strcat (pdbname, TEXT(".pdb"));
+		T_strcpy(pdbname, outname);
+		TCHAR *pDot = T_strrchr(pdbname, '.');
+		if (!pDot || pDot <= T_strrchr(pdbname, '/') || pDot <= T_strrchr(pdbname, '\\'))
+			T_strcat(pdbname, TEXT(".pdb"));
 		else
-			T_strcpy (pDot, TEXT(".pdb"));
+			T_strcpy(pDot, TEXT(".pdb"));
 	}
 	makefullpath(pdbname);
+
+	PEImage img;
+	if (!img.loadExe(argv[1]))
+		fatal(SARG ": %s", argv[1], img.getLastError());
+	PEImage dbgimg;
+	if (img.hasGNUDebugLink())
+	{
+		TCHAR dbgname[MAX_PATH]; // = L"ddoc4.dbg";
+#ifdef UNICODE
+		//mbstowcs(dbgname, img.gnu_debuglink, MAX_PATH);
+		MultiByteToWideChar(CP_ACP, 0, img.gnu_debuglink, -1, dbgname, MAX_PATH);
+#else
+		T_strcpy(dbgname, img.gnu_debuglink);
+#endif
+		if (!dbgimg.loadExe(dbgname))
+			fatal(SARG ": %s", dbgname, dbgimg.getLastError());
+		if (dbgimg.eh_frame != 0 && dbgimg.eh_frame_length == 0)
+			dbgimg.eh_frame = 0;
+		if (dbgimg.reloc != 0 && dbgimg.reloc_length == 0)
+			dbgimg.reloc = 0;
+	}
+
+	CV2PDB cv2pdb(img, img.hasGNUDebugLink() ? dbgimg : img);
+	cv2pdb.Dversion = Dversion;
+	cv2pdb.debug = debug;
+	cv2pdb.vsversion = vsversion;
+	cv2pdb.initLibraries();
+
+	if (img.countCVEntries() == 0 && !img.hasDWARF() && !img.hasGNUDebugLink())
+	{
+		if (!pdbref)
+			fatal(SARG ": no codeview debug entries found", argv[1]);
+
+		if (!cv2pdb.openPDB(pdbname, pdbref, true))
+			fatal(SARG ": %s", pdbname, cv2pdb.getLastError());
+
+		if (!cv2pdb.writeImage(outname))
+			fatal(SARG ": %s", outname, cv2pdb.getLastError());
+
+		return 0;
+	}
 
 	T_unlink(pdbname);
 
 	if(!cv2pdb.openPDB(pdbname, pdbref))
 		fatal(SARG ": %s", pdbname, cv2pdb.getLastError());
 
-	if(img.hasDWARF())
+	if(img.hasDWARF() || img.hasGNUDebugLink())
 	{
-		if(!img.relocateDebugLineInfo(0x400000))
-			fatal(SARG ": %s", argv[1], cv2pdb.getLastError());
+		//TODO: what should be relocated? img, dbgimg or nothing?
+		//if(!img.relocateDebugLineInfo(0x400000))
+		//	fatal(SARG ": %s", argv[1], cv2pdb.getLastError());
 
 		if(!cv2pdb.createDWARFModules())
 			fatal(SARG ": %s", pdbname, cv2pdb.getLastError());
 
 		if(!cv2pdb.addDWARFTypes())
+			fatal(SARG ": %s", pdbname, cv2pdb.getLastError());
+
+		if(!cv2pdb.addDWARFSymbols())
 			fatal(SARG ": %s", pdbname, cv2pdb.getLastError());
 
 		if(!cv2pdb.addDWARFLines())

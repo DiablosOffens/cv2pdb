@@ -15,13 +15,17 @@
 #define REMOVE_LF_DERIVED  1  // types wrong by DMD
 #define PRINT_INTERFACEVERSON 0
 
-CV2PDB::CV2PDB(PEImage& image)
-: img(image), pdb(0), dbi(0), libraries(0), rsds(0), modules(0), globmod(0)
+CV2PDB::CV2PDB(PEImage& image, const PEImage& debugimage)
+: img(image), dbgimg(debugimage), pdb(0), dbi(0), ipi(0), tpi(0), libraries(0), rsds(0), modules(0), globmod(0)
 , segMap(0), segMapDesc(0), segFrame2Index(0), globalTypeHeader(0)
 , globalTypes(0), cbGlobalTypes(0), allocGlobalTypes(0)
 , userTypes(0), cbUserTypes(0), allocUserTypes(0)
+, modTypes(0), cbModTypes(0)
 , globalSymbols(0), cbGlobalSymbols(0), staticSymbols(0), cbStaticSymbols(0)
 , udtSymbols(0), cbUdtSymbols(0), allocUdtSymbols(0)
+, modSymbols(0), cbModSymbols(0), allocModSymbols(0)
+, modFPOData(0), cbModFPOData(0), allocModFPOData(0)
+, modStringTable(0), cbModStringTable(0), allocModStringTable(0)
 , dwarfTypes(0), cbDwarfTypes(0), allocDwarfTypes(0)
 , srcLineStart(0), srcLineSections(0)
 , pointerTypes(0)
@@ -29,18 +33,19 @@ CV2PDB::CV2PDB(PEImage& image)
 , debug(false)
 , classEnumType(0), ifaceEnumType(0), cppIfaceEnumType(0), structEnumType(0)
 , classBaseType(0), ifaceBaseType(0), cppIfaceBaseType(0), structBaseType(0)
-, emptyFieldListType(0)
+, emptyFieldListType(0), emptyArgListType(0)
 {
 	memset(typedefs, 0, sizeof(typedefs));
 	memset(translatedTypedefs, 0, sizeof(translatedTypedefs));
 	cntTypedefs = 0;
+	nextGlobalType = 0x1000;
 	nextUserType = 0x1000;
 	nextDwarfType = 0x1000;
 
 	addClassTypeEnum = true;
 	addStringViewHelper = false;
 	useTypedefEnum = false;
-	useGlobalMod = true;
+	useGlobalMod = false;
 	thisIsNotRef = true;
 	v3 = true;
 	countEntries = img.countCVEntries();
@@ -48,24 +53,36 @@ CV2PDB::CV2PDB(PEImage& image)
 
 CV2PDB::~CV2PDB()
 {
-	cleanup(false);
+	if (!cleanup(false))
+		printf("%s\n", getLastError());
 }
 
 bool CV2PDB::cleanup(bool commit)
 {
+	setError(NULL);
+	bool hasError = getLastError() != NULL;
+	int rc;
 	if (modules)
 		for (int m = 0; m < countEntries; m++)
-			if (modules[m])
-				modules[m]->Close();
+			if (modules[m]) {
+				rc = modules[m]->Close();
+				if (rc <= 0)
+					return setError("cannot close modules");
+			}
 	delete [] modules;
-	if (globmod)
-		globmod->Close();
+	if (globmod) {
+		rc = globmod->Close();
+		if (rc <= 0)
+			return setError("cannot close global module");
+	}
 
 	if (dbi)
 		dbi->SetMachineType(img.isX64 () ? IMAGE_FILE_MACHINE_AMD64 : IMAGE_FILE_MACHINE_I386);
 
 	if (dbi)
 		dbi->Close();
+	if (ipi)
+		ipi->Close();
 	if (tpi)
 		tpi->Close();
 	if (pdb)
@@ -81,12 +98,24 @@ bool CV2PDB::cleanup(bool commit)
 		free(userTypes);
 	if (udtSymbols)
 		free(udtSymbols);
+	if (modSymbols)
+		free(modSymbols);
+	if (modFPOData)
+		free(modFPOData);
+	if (modStringTable)
+		free(modStringTable);
 	if (dwarfTypes)
 		free(dwarfTypes);
 	delete [] pointerTypes;
+	if (modTypes)
+		for (int m = 0; m < countEntries; m++)
+			if (modTypes[m])
+				delete [] modTypes[m];
+	delete [] modTypes;
+	delete [] cbModTypes;
 
-	for(int i = 0; i < srcLineSections; i++)
-		delete [] srcLineStart[i];
+	//for(int i = 0; i < srcLineSections; i++)
+	//	delete [] srcLineStart[i];
 	delete [] srcLineStart;
 	srcLineStart = 0;
 	srcLineSections =  0;
@@ -100,6 +129,8 @@ bool CV2PDB::cleanup(bool commit)
 	userTypes = 0;
 	cbUserTypes = 0;
 	allocUserTypes = 0;
+	modTypes = 0;
+	cbModTypes = 0;
 	globalSymbols = 0;
 	cbGlobalSymbols = 0;
 	staticSymbols = 0;
@@ -107,12 +138,23 @@ bool CV2PDB::cleanup(bool commit)
 	udtSymbols = 0;
 	cbUdtSymbols = 0;
 	allocUdtSymbols = 0;
+	modSymbols = 0;
+	cbModSymbols = 0;
+	allocModSymbols = 0;
+	modFPOData = 0;
+	cbModFPOData = 0;
+	allocModFPOData = 0;
+	modStringTable = 0;
+	cbModStringTable = 0;
+	allocModStringTable = 0;
 	cbDwarfTypes = 0;
 	allocDwarfTypes = 0;
 	modules = 0;
 	globmod = 0;
 	countEntries = 0;
 	dbi = 0;
+	ipi = 0;
+	tpi = 0;
 	pdb = 0;
 	rsds = 0;
 	segMap = 0;
@@ -126,7 +168,7 @@ bool CV2PDB::cleanup(bool commit)
 	return true;
 }
 
-bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
+bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref, bool readOnly)
 {
 #ifdef UNICODE
 	const wchar_t* pdbnameW = pdbname;
@@ -139,6 +181,7 @@ bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
 	mbstowcs (pdbnameW, pdbname, 260);
 #endif
 
+	mspdb::vsVersion = vsversion;
 	if (!initMsPdb ())
 		return setError("cannot load PDB helper DLL");
 	if (debug)
@@ -148,7 +191,7 @@ bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
 		GetModuleFileNameA(modMsPdb, modpath, 260);
 		printf("Loaded PDB helper DLL: %s\n", modpath);
 	}
-	pdb = CreatePDB (pdbnameW);
+	pdb = readOnly ? OpenPDB(pdbnameW) : CreatePDB (pdbnameW);
 	if (!pdb)
 		return setError("cannot create PDB file");
 
@@ -164,6 +207,9 @@ bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
 	rsds->age = pdb->QueryAge();
 	strcpy(rsds->name, pdbnameA);
 
+	if (readOnly)
+		return true;
+
 	int rc = pdb->CreateDBI("", &dbi);
 	if (rc <= 0 || !dbi)
 		return setError("cannot create DBI");
@@ -173,9 +219,17 @@ bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
 	printf("DBI::QueryImplementationVersion() = %d\n", dbi->QueryImplementationVersion());
 #endif
 
+	if (vsversion >= 11)
+	{
+		rc = pdb->OpenIpi("", &ipi);
+		if (rc <= 0 || !ipi)
+			return setError("cannot create IPI");
+	}
+
 	rc = pdb->OpenTpi("", &tpi);
 	if (rc <= 0 || !tpi)
 		return setError("cannot create TPI");
+
 
 #if PRINT_INTERFACEVERSON
 	printf("TPI::QueryInterfaceVersion() = %d\n", tpi->QueryInterfaceVersion());
@@ -187,9 +241,19 @@ bool CV2PDB::openPDB(const TCHAR* pdbname, const TCHAR* pdbref)
 
 bool CV2PDB::setError(const char* msg)
 {
-	char pdbmsg[256];
-	if(pdb)
-		pdb->QueryLastError (pdbmsg);
+	static char combinedmsg[mspdb::cbErrMax + 1024];
+	char pdbmsg[mspdb::cbErrMax];
+	long pdberr = 0;
+	if (pdb)
+		pdberr = pdb->QueryLastError(pdbmsg);
+	if (pdberr)
+	{
+		if (msg)
+			sprintf(combinedmsg, "%s\nPDB error (%d): %s\n", msg, pdberr, pdbmsg);
+		else
+			sprintf(combinedmsg, "PDB error (%d): %s\n", pdberr, pdbmsg);
+		msg = combinedmsg;
+	}
 	return LastError::setError(msg);
 }
 
@@ -318,7 +382,7 @@ bool CV2PDB::initSegMap()
 	return true;
 }
 
-int CV2PDB::numeric_leaf(int* value, const void* leaf)
+int CV2PDB::numeric_leaf(long long* value, const void* leaf)
 {
 	int length = ::numeric_leaf(value, leaf);
 	if(length == 0)
@@ -328,7 +392,7 @@ int CV2PDB::numeric_leaf(int* value, const void* leaf)
 
 int CV2PDB::copy_leaf(unsigned char* dp, int& dpos, const unsigned char* p, int& pos)
 {
-	int value;
+	long long value;
 	int leaf_len = numeric_leaf(&value, p + pos);
 	memcpy(dp + dpos, p + pos, leaf_len);
 	pos += leaf_len;
@@ -354,7 +418,8 @@ int CV2PDB::_doFields(int cmd, codeview_reftype* dfieldlist, const codeview_reft
 	const unsigned char* p = fieldlist->fieldlist.list;
 	unsigned char* dp = dfieldlist ? dfieldlist->fieldlist.list : 0;
 	int pos = 0, dpos = 0;
-	int leaf_len, value;
+	int leaf_len;
+	long long value;
 	int nested_types = 0;
 	int base_classes = 0;
 	int test_nested_type = (cmd == kCmdNestedTypes ? arg : 0);
@@ -687,18 +752,22 @@ int CV2PDB::countNestedTypes(const codeview_reftype* fieldlist, int type)
 	return _doFields(kCmdNestedTypes, 0, fieldlist, type);
 }
 
-int CV2PDB::addAggregate(codeview_type* dtype, bool clss, int n_element, int fieldlist, int property,
-                         int derived, int vshape, int structlen, const char*name)
+int CV2PDB::addAggregate(codeview_type* dtype, bool clss, bool iface, int n_element, int fieldlist, int property,
+                         int derived, int vshape, long long structlen, const char*name)
 {
-	dtype->struct_v2.id = clss ? (v3 ? LF_CLASS_V3 : LF_CLASS_V2) : (v3 ? LF_STRUCTURE_V3 : LF_STRUCTURE_V2);
+	dtype->struct_v2.id = LF_STRUCTURE_V2;
+	if (clss)
+		dtype->struct_v2.id = v3 ? LF_CLASS_V3 : LF_CLASS_V2;
+	else if (v3)
+		dtype->struct_v2.id = iface ? LF_INTERFACE_V3 : LF_STRUCTURE_V3;
 	dtype->struct_v2.n_element = n_element;
 	dtype->struct_v2.fieldlist = fieldlist;
 	dtype->struct_v2.property = property;
 	dtype->struct_v2.derived = derived;
 	dtype->struct_v2.vshape = vshape;
-	dtype->struct_v2.structlen = structlen;
-	int len = cstrcpy_v(v3, (BYTE*)(&dtype->struct_v2 + 1), name);
-	len += sizeof (dtype->struct_v2);
+	int len = (BYTE*)&dtype->struct_v2.structlen - (BYTE*)dtype;
+	len += write_numeric_leaf(structlen, &dtype->struct_v2.structlen);
+	len += cstrcpy_v(v3, (BYTE*)dtype + len, name);
 
 	unsigned char* p = (unsigned char*) dtype;
 	for (; len & 3; len++)
@@ -708,15 +777,39 @@ int CV2PDB::addAggregate(codeview_type* dtype, bool clss, int n_element, int fie
 }
 
 int CV2PDB::addClass(codeview_type* dtype, int n_element, int fieldlist, int property,
-                     int derived, int vshape, int structlen, const char*name)
+                     int derived, int vshape, long long structlen, const char*name)
 {
-	return addAggregate(dtype, true, n_element, fieldlist, property, derived, vshape, structlen, name);
+	return addAggregate(dtype, true, false, n_element, fieldlist, property, derived, vshape, structlen, name);
 }
 
 int CV2PDB::addStruct(codeview_type* dtype, int n_element, int fieldlist, int property,
-                      int derived, int vshape, int structlen, const char*name)
+                      int derived, int vshape, long long structlen, const char*name)
 {
-	return addAggregate(dtype, false, n_element, fieldlist, property, derived, vshape, structlen, name);
+	return addAggregate(dtype, false, false, n_element, fieldlist, property, derived, vshape, structlen, name);
+}
+
+int CV2PDB::addInterface(codeview_type* dtype, int n_element, int fieldlist, int property,
+	int derived, int vshape, long long structlen, const char*name)
+{
+	return addAggregate(dtype, false, true, n_element, fieldlist, property, derived, vshape, structlen, name);
+}
+
+int CV2PDB::addUnion(codeview_type* dtype, int n_element, int fieldlist, int property,
+					long long unionlen, const char*name)
+{
+	dtype->union_v2.id = (v3 ? LF_UNION_V3 : LF_UNION_V2);
+	dtype->union_v2.count = n_element;
+	dtype->union_v2.fieldlist = fieldlist;
+	dtype->union_v2.property = property;
+	int len = (BYTE*)&dtype->union_v2.un_len - (BYTE*)dtype;
+	len += write_numeric_leaf(unionlen, &dtype->union_v2.un_len);
+	len += cstrcpy_v(v3, (BYTE*)dtype + len, name);
+
+	unsigned char* p = (unsigned char*)dtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	dtype->struct_v2.len = len - 2;
+	return len;
 }
 
 int CV2PDB::addEnum(codeview_type* dtype, int count, int fieldlist, int property,
@@ -737,27 +830,65 @@ int CV2PDB::addEnum(codeview_type* dtype, int count, int fieldlist, int property
 	return len;
 }
 
-int CV2PDB::addPointerType(codeview_type* dtype, int type, int attr)
+int CV2PDB::addPointerType(codeview_type* dtype, int type, int attr, int inherit, int baseseg, int basetype, const char* basename)
 {
 	dtype->pointer_v2.id = LF_POINTER_V2;
-	dtype->pointer_v2.len = 10;
+	int len = sizeof(dtype->pointer_v2);
 	dtype->pointer_v2.datatype = translateType(type);
 	dtype->pointer_v2.attribute = attr;
-	return dtype->generic.len + 2; // no alignment data needed, because always 12 bytes
+	if ((attr&CV_PTR_BASE_MASK) == CV_PTR_BASE_SEG)
+	{
+		len = sizeof(dtype->pointer_base_seg_v2);
+		dtype->pointer_base_seg_v2.bseg = baseseg;
+	}
+	else if ((attr&CV_PTR_BASE_MASK) == CV_PTR_BASE_TYPE)
+	{
+		len = sizeof(dtype->pointer_base_type_v2) - sizeof(dtype->pointer_base_type_v2.p_name);
+		dtype->pointer_base_type_v2.pointertype = translateType(basetype);
+		len += cstrcpy_v(v3, (BYTE*)(&dtype->pointer_base_type_v2.p_name), basename);
+	}
+	else if ((attr&CV_PTR_MODE_MASK) == CV_PTR_MODE_PMEM ||
+		(attr&CV_PTR_MODE_MASK) == CV_PTR_MODE_PMFUNC)
+	{
+		len = sizeof(dtype->pointer_to_member_v2);
+		dtype->pointer_to_member_v2.pmclass = translateType(basetype);
+		dtype->pointer_to_member_v2.pmenum = ((attr&CV_PTR_MODE_MASK) == CV_PTR_MODE_PMEM ? CV_PMTYPE_D_Single : CV_PMTYPE_F_Single)
+			+ inherit;
+	}
+
+	unsigned char* p = (unsigned char*)dtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	dtype->pointer_v2.len = len - 2;
+	return len;
 }
+
 int CV2PDB::addPointerType(unsigned char* dtype, int type, int attr)
 {
 	return addPointerType((codeview_type*) dtype, type, attr);
 }
 
-int CV2PDB::addFieldMember(codeview_fieldtype* dfieldtype, int attr, int offset, int type, const char* name)
+int CV2PDB::addModifierType(codeview_type* dtype, int type, int attr)
+{
+	dtype->modifier_v2.id = LF_MODIFIER_V2;
+	dtype->modifier_v2.type = translateType(type);
+	dtype->modifier_v2.attribute = attr;
+	int len = sizeof(dtype->modifier_v2);
+	unsigned char* p = (unsigned char*)dtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	dtype->modifier_v2.len = len - 2;
+	return len;
+}
+
+int CV2PDB::addFieldMember(codeview_fieldtype* dfieldtype, int attr, long long offset, int type, const char* name)
 {
 	dfieldtype->member_v2.id = v3 ? LF_MEMBER_V3 : LF_MEMBER_V2;
 	dfieldtype->member_v2.attribute = attr;
-	dfieldtype->member_v2.offset = offset;
 	dfieldtype->member_v2.type = translateType(type);
-	int len = cstrcpy_v(v3, (BYTE*)(&dfieldtype->member_v2 + 1), name);
-	len += sizeof (dfieldtype->member_v2);
+	int len = (BYTE*)&dfieldtype->member_v2.offset - (BYTE*)dfieldtype;
+	len += write_numeric_leaf(offset, &dfieldtype->member_v2.offset);
+	len += cstrcpy_v(v3, (BYTE*)dfieldtype + len, name);
 
 	unsigned char* p = (unsigned char*) dfieldtype;
 	for (; len & 3; len++)
@@ -793,14 +924,61 @@ int CV2PDB::addFieldNestedType(codeview_fieldtype* dfieldtype, int type, const c
 	return len;
 }
 
-int CV2PDB::addFieldEnumerate(codeview_fieldtype* dfieldtype, const char* name, int val)
+int CV2PDB::addFieldBaseClass(codeview_fieldtype* dfieldtype, int attr, long long offset, int type)
+{
+	dfieldtype->bclass_v2.id = LF_BCLASS_V2;
+	dfieldtype->bclass_v2.attribute = attr;
+	dfieldtype->bclass_v2.type = translateType(type);
+	int len = (BYTE*)&dfieldtype->bclass_v2.offset - (BYTE*)dfieldtype;
+	len += write_numeric_leaf(offset, &dfieldtype->bclass_v2.offset);
+
+	unsigned char* p = (unsigned char*)dfieldtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	return len;
+}
+
+int CV2PDB::addFieldSingleMethod(codeview_fieldtype* dfieldtype, int attr, int type, unsigned long vtoff, const char* name)
+{
+	dfieldtype->onemethod_v2.id = v3 ? LF_ONEMETHOD_V3 : LF_ONEMETHOD_V2;
+	dfieldtype->onemethod_v2.attribute = attr;
+	dfieldtype->onemethod_v2.type = translateType(type);
+	int len = sizeof(dfieldtype->onemethod_v2) - sizeof(dfieldtype->onemethod_v2.p_name);
+	if ((attr&CV_fldattr_MTmask) == CV_fldattr_MTintro ||
+		(attr&CV_fldattr_MTmask) == CV_fldattr_MTpureintro)
+	{
+		dfieldtype->onemethod_virt_v2.vtab_offset = vtoff;
+		len += sizeof(dfieldtype->onemethod_virt_v2.vtab_offset);
+	}
+	len += cstrcpy_v(v3, (BYTE*)dfieldtype + len, name);
+
+	unsigned char* p = (unsigned char*)dfieldtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	return len;
+}
+
+int CV2PDB::addFieldMethodList(codeview_fieldtype* dfieldtype, int count, int methodlist, const char* name)
+{
+	dfieldtype->method_v2.id = v3 ? LF_METHOD_V3 : LF_METHOD_V2;
+	dfieldtype->method_v2.count = count;
+	dfieldtype->method_v2.mlist = methodlist;
+	int len = cstrcpy_v(v3, (BYTE*)(&dfieldtype->method_v2.p_name), name);
+	len += sizeof(dfieldtype->method_v2) - sizeof(dfieldtype->method_v2.p_name);
+
+	unsigned char* p = (unsigned char*)dfieldtype;
+	for (; len & 3; len++)
+		p[len] = 0xf4 - (len & 3);
+	return len;
+}
+
+int CV2PDB::addFieldEnumerate(codeview_fieldtype* dfieldtype, const char* name, long long val)
 {
 	dfieldtype->enumerate_v1.id = v3 ? LF_ENUMERATE_V3 : LF_ENUMERATE_V1;
 	dfieldtype->enumerate_v1.attribute = 0;
-	//assert(val < LF_NUMERIC);
-	dfieldtype->enumerate_v1.value = val;
-	int len = cstrcpy_v(v3, (BYTE*)(&dfieldtype->enumerate_v1 + 1), name);
-	len += sizeof (dfieldtype->enumerate_v1);
+	int len = (BYTE*)&dfieldtype->enumerate_v1.value - (BYTE*)dfieldtype;
+	len += write_numeric_leaf(val, &dfieldtype->enumerate_v1.value);
+	len += cstrcpy_v(v3, (BYTE*)dfieldtype + len, name);
 
 	unsigned char* p = (unsigned char*) dfieldtype;
 	for (; len & 3; len++)
@@ -808,12 +986,46 @@ int CV2PDB::addFieldEnumerate(codeview_fieldtype* dfieldtype, const char* name, 
 	return len;
 }
 
+int CV2PDB::addFieldVFuncTable(codeview_fieldtype* dfieldtype, int type)
+{
+	dfieldtype->vfunctab_v2.id = LF_VFUNCTAB_V2; // id correct?
+	dfieldtype->vfunctab_v2._pad0 = 0;
+	dfieldtype->vfunctab_v2.type = translateType(type); // vtable*
+	return sizeof(dfieldtype->vfunctab_v2);
+}
+
+int CV2PDB::addMethodListMethod(codeview_mltype * dmltype, int attr, int type, unsigned long vtoff)
+{
+	dmltype->method_v2.attribute = attr;
+	dmltype->method_v2._pad0 = 0;
+	dmltype->method_v2.type = translateType(type);
+	int len = sizeof(dmltype->method_v2);
+	if ((attr&CV_fldattr_MTmask) == CV_fldattr_MTintro ||
+		(attr&CV_fldattr_MTmask) == CV_fldattr_MTpureintro)
+	{
+		dmltype->method_virt_v2.vbaseoff = vtoff;
+		len += sizeof(dmltype->method_virt_v2.vbaseoff);
+	}
+	return len;
+}
+
+void* CV2PDB::safe_realloc(void* p, size_t size)
+{
+	void* newp = realloc(p, size);
+	if (newp == nullptr)
+	{
+		free(p);
+		__debugbreak(); //TODO: better error handling
+	}
+	return newp;
+}
+
 void CV2PDB::checkUserTypeAlloc(int size, int add)
 {
 	if (cbUserTypes + size >= allocUserTypes)
 	{
 		allocUserTypes += size + add;
-		userTypes = (BYTE*) realloc(userTypes, allocUserTypes);
+		userTypes = (BYTE*) safe_realloc(userTypes, allocUserTypes);
 	}
 }
 
@@ -832,15 +1044,61 @@ void CV2PDB::checkGlobalTypeAlloc(int size, int add)
 	if (cbGlobalTypes + size > allocGlobalTypes)
 	{
 		allocGlobalTypes += size + add;
-		globalTypes = (unsigned char*) realloc(globalTypes, allocGlobalTypes);
+		globalTypes = (unsigned char*) safe_realloc(globalTypes, allocGlobalTypes);
 	}
+}
+
+int CV2PDB::getTypeModifier(int type, bool term_indir)
+{
+	const codeview_type* cvt;
+
+	int mods = 0;
+	while ((cvt = getTypeData(type)) != NULL)
+	{
+		switch (cvt->generic.id)
+		{
+		case LF_MODIFIER_V2:
+			mods |= cvt->modifier_v2.attribute;
+			type = cvt->modifier_v2.type;
+			continue;
+		case LF_POINTER_V2:
+			if(term_indir)
+			{
+				//include pointer attributes
+				if (cvt->pointer_v2.attribute&CV_PTR_isvolatile)
+					mods |= CV_modifier_volatile;
+				if (cvt->pointer_v2.attribute&CV_PTR_isconst)
+					mods |= CV_modifier_const;
+				if (cvt->pointer_v2.attribute&CV_PTR_isunaligned)
+					mods |= CV_modifier_unaligned;
+				return mods;
+			}
+			mods = 0;
+			type = cvt->pointer_v2.datatype;
+			continue;
+		case LF_ARRAY_V2:
+		case LF_ARRAY_V3:
+			if (term_indir)
+				return mods;
+			mods = 0;
+			type = cvt->array_v2.elemtype;
+			continue;
+		default:
+			return mods;
+		}
+	}
+	return mods;
 }
 
 const codeview_type* CV2PDB::getTypeData(int type)
 {
 	if (!globalTypeHeader)
-		return 0;
-	if (type < 0x1000 || type >= (int) (0x1000 + globalTypeHeader->cTypes + nextUserType))
+	{
+		if (type < nextGlobalType)
+			return getGlobalTypeData(type);
+		return getUserTypeData(type);
+	}
+	if (type < 0x1000)
 		return 0;
 	if (type >= (int) (0x1000 + globalTypeHeader->cTypes))
 		return getUserTypeData(type);
@@ -853,7 +1111,7 @@ const codeview_type* CV2PDB::getTypeData(int type)
 
 const codeview_type* CV2PDB::getUserTypeData(int type)
 {
-	type -= 0x1000 + globalTypeHeader->cTypes;
+	type -= nextGlobalType;
 	if (type < 0 || type >= nextUserType - 0x1000)
 		return 0;
 
@@ -868,10 +1126,10 @@ const codeview_type* CV2PDB::getUserTypeData(int type)
 	return (codeview_type*)(userTypes + pos);
 }
 
-const codeview_type* CV2PDB::getConvertedTypeData(int type)
+const codeview_type* CV2PDB::getGlobalTypeData(int type)
 {
 	type -= 0x1000;
-	if (type < 0 || type >= nextUserType - 0x1000)
+	if (type < 0 || type >= nextGlobalType - 0x1000)
 		return 0;
 
 	int pos = 4;
@@ -892,7 +1150,7 @@ const codeview_type* CV2PDB::findCompleteClassType(const codeview_type* cvtype, 
 	if(!pname)
 		return 0;
 
-	if(globalTypeHeader)
+	if (globalTypeHeader)
 	{
 		DWORD* offset = (DWORD*)(globalTypeHeader + 1);
 		BYTE* typeData = (BYTE*)(offset + globalTypeHeader->cTypes);
@@ -901,25 +1159,25 @@ const codeview_type* CV2PDB::findCompleteClassType(const codeview_type* cvtype, 
 			const codeview_type* type = (const codeview_type*)(typeData + offset[t]);
 			if (isCompleteStruct(type, pname, cstr))
 			{
-				if(ptype)
+				if (ptype)
 					*ptype = t;
 				return type;
 			}
 		}
-	}
-	if(userTypes)
-	{
-		int t = globalTypeHeader->cTypes;
-		for(int pos = 0; pos < cbUserTypes; t++)
+		if (userTypes)
 		{
-			const codeview_type* type = (codeview_type*)(userTypes + pos);
-			if (isCompleteStruct(type, pname, cstr))
+			int t = globalTypeHeader->cTypes;
+			for (int pos = 0; pos < cbUserTypes; t++)
 			{
-				if(ptype)
-					*ptype = t;
-				return type;
+				const codeview_type* type = (codeview_type*)(userTypes + pos);
+				if (isCompleteStruct(type, pname, cstr))
+				{
+					if (ptype)
+						*ptype = t;
+					return type;
+				}
+				pos += type->generic.len + 2;
 			}
-			pos += type->generic.len + 2;
 		}
 	}
 	return cvtype;
@@ -986,9 +1244,10 @@ int CV2PDB::sizeofClassType(const codeview_type* cvtype)
 	if (getStructProperty(cvtype) & kPropIncomplete)
 		cvtype = findCompleteClassType(cvtype);
 
-	int value;
+	long long value;
 	int leaf_len = numeric_leaf(&value, &cvtype->struct_v1.structlen);
-	return value;
+	assert(value <= INT_MAX);
+	return (int)value;
 }
 
 int CV2PDB::sizeofBasicType(int type)
@@ -1220,7 +1479,8 @@ bool CV2PDB::nameOfType(int type, char* name, int maxlen)
 	if(!ptype)
 		return setError("nameOfType: invalid type while retreiving name of type");
 
-	int leaf_len, value, len;
+	int leaf_len, len;
+	long long value;
 	switch(ptype->generic.id)
 	{
 	case LF_CLASS_V1:
@@ -1686,11 +1946,7 @@ int CV2PDB::appendObjectType (int object_type, int enumType, const char* classSy
 	bool addViewHelper = object_type == kClassTypeObject;
 	if(addViewHelper)
 	{
-		rdtype = (codeview_reftype*) (userTypes + cbUserTypes);
-		rdtype->fieldlist.id = LF_FIELDLIST_V2;
-		int helpfieldlistType = nextUserType++;
-		rdtype->fieldlist.len = 2;
-		cbUserTypes += rdtype->fieldlist.len + 2;
+		int helpfieldlistType = createEmptyFieldListType();
 
 		dtype = (codeview_type*) (userTypes + cbUserTypes);
 		cbUserTypes += addClass(dtype, 0, helpfieldlistType, 0, 0, 0, 0, "object_viewhelper");
@@ -1700,11 +1956,11 @@ int CV2PDB::appendObjectType (int object_type, int enumType, const char* classSy
 
 	// vtable
 	rdtype = (codeview_reftype*) (userTypes + cbUserTypes);
-	rdtype->generic.len = 6;
-	rdtype->generic.id = LF_VTSHAPE_V1;
-	((unsigned short*)(&rdtype->generic + 1))[0] = 1;
-	((unsigned short*)(&rdtype->generic + 1))[1] = 0xf150;
-	cbUserTypes += rdtype->generic.len + 2;
+	rdtype->vtshape_v1.len = 6;
+	rdtype->vtshape_v1.id = LF_VTSHAPE_V1;
+	rdtype->vtshape_v1.num = 1;
+	rdtype->vtshape_v1.desc[0] = CV_VTS_near32;
+	writeUserTypeLen((codeview_type*)rdtype, sizeof(rdtype->vtshape_v1));
 	int vtableType = nextUserType++;
 
 	// vtable*
@@ -1717,10 +1973,7 @@ int CV2PDB::appendObjectType (int object_type, int enumType, const char* classSy
 	rdtype->fieldlist.id = LF_FIELDLIST_V2;
 
 	codeview_fieldtype* dfieldtype = (codeview_fieldtype*)rdtype->fieldlist.list;
-	dfieldtype->vfunctab_v2.id = LF_VFUNCTAB_V2; // id correct?
-	dfieldtype->vfunctab_v2._pad0 = 0;
-	dfieldtype->vfunctab_v2.type = vtablePtrType; // vtable*
-	rdtype->fieldlist.len = sizeof(dfieldtype->vfunctab_v2) + 2;
+	rdtype->fieldlist.len = addFieldVFuncTable(dfieldtype, vtablePtrType) + 2;
 	int numElem = 1;
 
 	if(addViewHelper)
@@ -1763,14 +2016,7 @@ int CV2PDB::appendModifierType(int type, int attr)
 	checkUserTypeAlloc();
 
 	codeview_type* dtype = (codeview_type*) (userTypes + cbUserTypes);
-	dtype->modifier_v2.id = LF_MODIFIER_V2;
-	dtype->modifier_v2.type = translateType(type);
-	dtype->modifier_v2.attribute = attr;
-	int len = sizeof(dtype->modifier_v2);
-	//for (; len & 3; len++)
-	//	userTypes[cbUserTypes + len] = 0xf4 - (len & 3);
-	dtype->modifier_v2.len = len - 2;
-	cbUserTypes += len;
+	cbUserTypes += addModifierType(dtype, type, attr);
 
 	nextUserType++;
 	return nextUserType - 1;
@@ -1847,7 +2093,7 @@ int CV2PDB::getBaseClass(const codeview_type* cvtype)
 	if (getStructProperty(cvtype) & kPropIncomplete)
 		cvtype = findCompleteClassType(cvtype);
 
-	const codeview_reftype* fieldlist = (const codeview_reftype*) getConvertedTypeData(getStructFieldlist(cvtype));
+	const codeview_reftype* fieldlist = (const codeview_reftype*) getGlobalTypeData(getStructFieldlist(cvtype));
 	if (!fieldlist || (fieldlist->generic.id != LF_FIELDLIST_V1 && fieldlist->generic.id != LF_FIELDLIST_V2))
 		return 0;
 
@@ -1864,7 +2110,7 @@ int CV2PDB::countBaseClasses(const codeview_type* cvtype)
 	if (getStructProperty(cvtype) & kPropIncomplete)
 		cvtype = findCompleteClassType(cvtype);
 
-	const codeview_reftype* fieldlist = (const codeview_reftype*) getConvertedTypeData(getStructFieldlist(cvtype));
+	const codeview_reftype* fieldlist = (const codeview_reftype*) getGlobalTypeData(getStructFieldlist(cvtype));
 	if (!fieldlist || (fieldlist->generic.id != LF_FIELDLIST_V1 && fieldlist->generic.id != LF_FIELDLIST_V2))
 		return 0;
 
@@ -1924,18 +2170,15 @@ void CV2PDB::ensureUDT(int type, const codeview_type* cvtype)
 		return;
 
 	char name[kMaxNameLen];
-	int value, leaf_len = numeric_leaf(&value, &cvtype->struct_v1.structlen);
+	long long value;
+	int leaf_len = numeric_leaf(&value, &cvtype->struct_v1.structlen);
 	pstrcpy_v(true, (BYTE*) name, (const BYTE*)  &cvtype->struct_v1.structlen + leaf_len);
 
 	if (getStructProperty(cvtype) & kPropIncomplete)
 	{
-		checkUserTypeAlloc();
+		int helpfieldlistType = createEmptyFieldListType();
 
-		codeview_reftype* rdtype = (codeview_reftype*) (userTypes + cbUserTypes);
-		rdtype->fieldlist.id = LF_FIELDLIST_V2;
-		int helpfieldlistType = nextUserType++;
-		rdtype->fieldlist.len = 2;
-		cbUserTypes += rdtype->fieldlist.len + 2;
+		checkUserTypeAlloc();
 
 		codeview_type*dtype = (codeview_type*) (userTypes + cbUserTypes);
 		cbUserTypes += addClass(dtype, 0, helpfieldlistType, 0, 0, 0, 4, name);
@@ -1962,11 +2205,27 @@ int CV2PDB::createEmptyFieldListType()
 	return emptyFieldListType;
 }
 
-int CV2PDB::appendTypedef(int type, const char* name, bool saveTranslation)
+int CV2PDB::createEmptyArgListType()
+{
+	if (emptyArgListType > 0)
+		return emptyArgListType;
+
+	checkUserTypeAlloc();
+	codeview_reftype* rdtype = (codeview_reftype*)(userTypes + cbUserTypes);
+	rdtype->arglist_v2.id = LF_ARGLIST_V2;
+	rdtype->arglist_v2.len = 6;
+	rdtype->arglist_v2.num = 0;
+	cbUserTypes += rdtype->arglist_v2.len + 2;
+	emptyArgListType = nextUserType++;
+
+	return emptyArgListType;
+}
+
+int CV2PDB::appendTypedef(int type, const char* name, int mode, bool saveTranslation)
 {
 	int basetype = type;
 	if(type == 0x78)
-		basetype = 0x75; // dchar type not understood by debugger, use uint instead
+		basetype = T_UINT4; // dchar type not understood by debugger, use uint instead
 
 	int typedefType;
 	if(useTypedefEnum)
@@ -1976,19 +2235,12 @@ int CV2PDB::appendTypedef(int type, const char* name, bool saveTranslation)
 		int fieldlistType = createEmptyFieldListType();
 
 		codeview_type* dtype = (codeview_type*) (userTypes + cbUserTypes);
-		dtype->enumeration_v2.id = (v3 ? LF_ENUM_V3 : LF_ENUM_V2);
-		dtype->enumeration_v2.type = basetype;
-		dtype->enumeration_v2.fieldlist = fieldlistType;
-		dtype->enumeration_v2.count = 0;
-		dtype->enumeration_v2.property = kPropReserved2;
-		int len = cstrcpy_v (v3, (BYTE*) &dtype->enumeration_v2.p_name, name);
-		len += sizeof(dtype->enumeration_v2) - sizeof(dtype->enumeration_v2.p_name);
-		writeUserTypeLen(dtype, len);
+		cbUserTypes += addEnum(dtype, 0, fieldlistType, kPropHasUniqueName, basetype, name);
 		typedefType = nextUserType++;
 	}
 	else
 	{
-		typedefType = appendModifierType(type, 0);
+		typedefType = appendModifierType(type, mode);
 	}
 	if(saveTranslation)
 	{
@@ -2004,20 +2256,20 @@ void CV2PDB::appendTypedefs()
 	if(Dversion == 0)
 		return;
 
-	appendTypedef(0x10, "byte");
-	appendTypedef(0x20, "ubyte");
-	appendTypedef(0x21, "ushort");
-	appendTypedef(0x75, "uint");
-	appendTypedef(0x13, "dlong"); // instead of "long"
-	appendTypedef(0x23, "ulong");
-	appendTypedef(0x42, "real");
+	appendTypedef(T_CHAR, "byte", 0);
+	appendTypedef(T_UCHAR, "ubyte", 0);
+	appendTypedef(T_USHORT, "ushort", 0);
+	appendTypedef(T_UINT4, "uint", 0);
+	appendTypedef(T_QUAD, "dlong", 0); // instead of "long"
+	appendTypedef(T_UQUAD, "ulong", 0);
+	appendTypedef(T_REAL80, "real", 0);
 	// no imaginary types
-	appendTypedef(0x71, "wchar");
-	appendTypedef(0x78, "dchar");
+	appendTypedef(T_WCHAR, "wchar", 0);
+	appendTypedef(0x78, "dchar", 0);
 
-	appendComplex(0x50, 0x40, 4, "cfloat");
-	appendComplex(0x51, 0x41, 8, "cdouble");
-	appendComplex(0x52, 0x42, 10, "creal");
+	appendComplex(T_CPLX32, T_REAL32, 4, "cfloat");
+	appendComplex(T_CPLX64, T_REAL64, 8, "cdouble");
+	appendComplex(T_CPLX80, T_REAL80, 10, "creal");
 }
 
 bool CV2PDB::initGlobalTypes()
@@ -2042,10 +2294,11 @@ bool CV2PDB::initGlobalTypes()
 			allocGlobalTypes = entry->cb + 4;
 			if (!globalTypes)
 				return setError("Out of memory");
-			*(DWORD*) globalTypes = 4;
-			cbGlobalTypes = 4;
+			*(DWORD*) globalTypes = CV_SIGNATURE_C13;
+			cbGlobalTypes = sizeof(DWORD);
 
-			nextUserType = globalTypeHeader->cTypes + 0x1000;
+			nextGlobalType = globalTypeHeader->cTypes + 0x1000;
+			nextUserType = nextGlobalType;
 
 			appendTypedefs();
 			if(Dversion > 0)
@@ -2067,7 +2320,8 @@ bool CV2PDB::initGlobalTypes()
 			{
 				const codeview_type* type = (codeview_type*)(typeData + offset[t]);
 				const codeview_reftype* rtype = (codeview_reftype*)(typeData + offset[t]);
-				int leaf_len, value;
+				int leaf_len;
+				long long value;
 
 				int len = type->generic.len + 2;
 				checkGlobalTypeAlloc(len + 1000);
@@ -2077,14 +2331,15 @@ bool CV2PDB::initGlobalTypes()
 				codeview_reftype* rdtype = (codeview_reftype*) (globalTypes + cbGlobalTypes);
 
 				// for debugging, cancel special processing after the limit
-				unsigned int typeLimit = 0x7fffffff; // 0x1ddd; //
+				unsigned int typeLimit = INT_MAX; // 0x1ddd; //
 				if (t > typeLimit)
 				{
 					dtype->pointer_v2.id = LF_POINTER_V2;
-					dtype->pointer_v2.len = 10;
-					dtype->pointer_v2.datatype = 0x74;
+					len = sizeof(dtype->pointer_v2);
+					dtype->pointer_v2.len = len - 2;
+					dtype->pointer_v2.datatype = T_INT4;
 					dtype->pointer_v2.attribute = 0x800a;
-					cbGlobalTypes += 12;
+					cbGlobalTypes += len;
 					continue;
 				}
 
@@ -2094,38 +2349,42 @@ bool CV2PDB::initGlobalTypes()
 				{
 					codeview_oem_type* oem = (codeview_oem_type*)(&type->generic + 1);
 
-					if (oem->generic.oemid == 0x42 && oem->generic.id == 1)
+					if (oem->generic.oemid == 0x42 &&
+						oem->generic.id >= 1 && oem->generic.id <= 3)
 					{
-						if(Dversion == 0) // in dmc, this is used for (u)int64
+						if (oem->generic.id == 1)
 						{
-							dtype->modifier_v2.id = LF_MODIFIER_V2;
-							dtype->modifier_v2.attribute = 0;
-							dtype->modifier_v2.type = 0x13;
-							len = sizeof(dtype->modifier_v2);
+							if (Dversion == 0) // in dmc, this is used for (u)int64
+							{
+								dtype->modifier_v2.id = LF_MODIFIER_V2;
+								dtype->modifier_v2.attribute = 0;
+								dtype->modifier_v2.type = T_QUAD;
+								len = sizeof(dtype->modifier_v2);
+							}
+							else
+							{
+								const char* name = appendDynamicArray(oem->d_dyn_array.index_type, oem->d_dyn_array.elem_type);
+								len = addClass(dtype, 0, 0, kPropIncomplete, 0, 0, 0, name);
+							}
 						}
-						else
+						else if (oem->generic.id == 3)
 						{
-							const char* name = appendDynamicArray(oem->d_dyn_array.index_type, oem->d_dyn_array.elem_type);
+							const char* name = appendDelegate(oem->d_delegate.this_type, oem->d_delegate.func_type);
 							len = addClass(dtype, 0, 0, kPropIncomplete, 0, 0, 0, name);
 						}
-					}
-					else if (oem->generic.oemid == 0x42 && oem->generic.id == 3)
-					{
-						const char* name = appendDelegate(oem->d_delegate.this_type, oem->d_delegate.func_type);
-						len = addClass(dtype, 0, 0, kPropIncomplete, 0, 0, 0, name);
-					}
-					else if (oem->generic.oemid == 0x42 && oem->generic.id == 2)
-					{
-						const char* name = appendAssocArray(oem->d_assoc_array.key_type, oem->d_assoc_array.elem_type);
-						len = addClass(dtype, 0, 0, kPropIncomplete, 0, 0, 0, name);
+						else if (oem->generic.id == 2)
+						{
+							const char* name = appendAssocArray(oem->d_assoc_array.key_type, oem->d_assoc_array.elem_type);
+							len = addClass(dtype, 0, 0, kPropIncomplete, 0, 0, 0, name);
+						}
 					}
 					else
 					{
 						dtype->pointer_v2.id = LF_POINTER_V2;
-						dtype->pointer_v2.len = 10;
+						len = sizeof(dtype->pointer_v2);
+						dtype->pointer_v2.len = len - 2;
 						dtype->pointer_v2.datatype = oem->d_dyn_array.elem_type;
 						dtype->pointer_v2.attribute = 0x800a;
-						len = 12;
 					}
 					break;
 				}
@@ -2141,7 +2400,7 @@ bool CV2PDB::initGlobalTypes()
 					dtype->procedure_v2.id = LF_PROCEDURE_V2;
 					dtype->procedure_v2.rvtype   = translateType(type->procedure_v1.rvtype);
 					dtype->procedure_v2.call     = type->procedure_v1.call;
-					dtype->procedure_v2.reserved = type->procedure_v1.reserved;
+					dtype->procedure_v2.attr     = type->procedure_v1.attr;
 					dtype->procedure_v2.params   = type->procedure_v1.params;
 					dtype->procedure_v2.arglist  = type->procedure_v1.arglist;
 					len = sizeof(dtype->procedure_v2);
@@ -2161,7 +2420,7 @@ bool CV2PDB::initGlobalTypes()
 							if(td->generic.id == LF_FIELDLIST_V1 || td->generic.id == LF_FIELDLIST_V2)
 								dtype->struct_v2.n_element = countFields((const codeview_reftype*)td);
 					dtype->struct_v2.property = fixProperty(t + 0x1000, type->struct_v1.property,
-					                                        type->struct_v1.fieldlist) | kPropReserved2;
+					                                        type->struct_v1.fieldlist) | kPropHasUniqueName;
 #if REMOVE_LF_DERIVED
 					dtype->struct_v2.derived = 0;
 #else
@@ -2241,7 +2500,7 @@ bool CV2PDB::initGlobalTypes()
 					}
 					dtype->mfunction_v2.this_type = translateType(type->mfunction_v1.this_type);
 					dtype->mfunction_v2.call = type->mfunction_v1.call;
-					dtype->mfunction_v2.reserved = type->mfunction_v1.reserved;
+					dtype->mfunction_v2.attr = type->mfunction_v1.attr;
 					dtype->mfunction_v2.params = type->mfunction_v1.params;
 					dtype->mfunction_v2.arglist = type->mfunction_v1.arglist;
 					dtype->mfunction_v2.this_adjust = type->mfunction_v1.this_adjust;
@@ -2332,6 +2591,10 @@ bool CV2PDB::initGlobalTypes()
 					break;
 				}
 
+				//TODO: should also check above writes by struct pointer
+				if (((cbGlobalTypes + len + 3) & ~3) > allocGlobalTypes)
+					return setError("globalTypes buffer is not large enough");
+
 				for (; len & 3; len++)
 					globalTypes[cbGlobalTypes + len] = 0xf4 - (len & 3);
 				dtype->generic.len = len - 2;
@@ -2421,7 +2684,7 @@ bool CV2PDB::insertClassTypeEnums()
 		case LF_STRUCTURE_V2:
 		case LF_CLASS_V3:
 		case LF_CLASS_V2:
-			if(const codeview_type* fieldlist = getConvertedTypeData(type->struct_v2.fieldlist))
+			if(const codeview_type* fieldlist = getGlobalTypeData(type->struct_v2.fieldlist))
 			{
 				if(!hasClassTypeEnum(fieldlist))
 				{
@@ -2532,16 +2795,14 @@ bool CV2PDB::createSrcLineBitmap()
 		return false;
 
 	srcLineSections = segMap->cSeg;
-	srcLineStart = new char*[srcLineSections];
-	memset(srcLineStart, 0, srcLineSections * sizeof (*srcLineStart));
+	srcLineStart = new std::vector<bool>[srcLineSections];
 
 	for (int s = 0; s < segMap->cSeg; s++)
 	{
 		// cbSeg=-1 found in binary created by Metroworks CodeWarrior, so avoid new char[(size_t)-1]
 		if (segMapDesc[s].cbSeg <= LONG_MAX)
 		{
-			srcLineStart[s] = new char[segMapDesc[s].cbSeg];
-			memset(srcLineStart[s], 0, segMapDesc[s].cbSeg);
+			new(&srcLineStart[s]) std::vector<bool>(segMapDesc[s].cbSeg);
 		}
 	}
 
@@ -2706,9 +2967,9 @@ bool CV2PDB::addPublics()
 					dsym2c((BYTE*)sym->data_v1.p_name.name, sym->data_v1.p_name.namelen, symname, sizeof(symname));
 					int type = translateType(sym->data_v1.symtype);
 					if (mod)
-						rc = mod->AddPublic2(symname, sym->data_v1.segment, sym->data_v1.offset, type);
+						rc = mod->AddPublic2(symname, sym->data_v1.segment, sym->data_v1.offset, CV_PUBSYMFLAGS_cvpsfNone);
 					else
-						rc = dbi->AddPublic2(symname, sym->data_v1.segment, sym->data_v1.offset, type);
+						rc = dbi->AddPublic2(symname, sym->data_v1.segment, sym->data_v1.offset, CV_PUBSYMFLAGS_cvpsfNone);
 					if (rc <= 0)
 						return setError("cannot add public");
 					break;
@@ -2747,7 +3008,8 @@ int CV2PDB::copySymbols(BYTE* srcSymbols, int srcSize, BYTE* destSymbols, int de
 {
 	codeview_symbol* lastGProcSym = 0;
 	int type, length, destlength;
-	int leaf_len, value;
+	int leaf_len;
+	long long value;
 	for (int i = 0; i < srcSize; i += length)
 	{
 		codeview_symbol* sym = (codeview_symbol*)(srcSymbols + i);
@@ -2900,8 +3162,8 @@ int CV2PDB::copySymbols(BYTE* srcSymbols, int srcSize, BYTE* destSymbols, int de
 			lastGProcSym = 0;
 			break;
 		case S_COMPILAND_V1:
-			if (((dsym->compiland_v1.unknown >> 8) & 0xFF) == 0) // C?
-				dsym->compiland_v1.unknown = (dsym->compiland_v1.unknown & ~0xFF00 | 0x100); // C++
+			if (dsym->compiland_v1.language == CV_CFL_C) // C?
+				dsym->compiland_v1.language = CV_CFL_CXX; // C++
 			break;
 		case S_PROCREF_V1:
 		case S_DATAREF_V1:
@@ -3004,54 +3266,123 @@ void CV2PDB::checkUdtSymbolAlloc(int size, int add)
 	if (cbUdtSymbols + size > allocUdtSymbols)
 	{
 		allocUdtSymbols += size + add;
-		udtSymbols = (BYTE*) realloc(udtSymbols, allocUdtSymbols);
+		udtSymbols = (BYTE*) safe_realloc(udtSymbols, allocUdtSymbols);
 	}
 }
 
-bool CV2PDB::addUdtSymbol(int type, const char* name)
+bool CV2PDB::addUdtSymbol(int type, const char* name, bool global)
 {
-	checkUdtSymbolAlloc(100 + kMaxNameLen);
+	unsigned int len;
+	const unsigned int align = 4;
+	codeview_symbol* sym;
+	if (global)
+	{
+		checkUdtSymbolAlloc(100 + kMaxNameLen);
+		sym = (codeview_symbol*)(udtSymbols + cbUdtSymbols);
+	}
+	else
+	{
+		checkModSymbolAlloc(100 + kMaxNameLen);
+		sym = (codeview_symbol*)(modSymbols + cbModSymbols);
+	}
 
 	// no need to convert to udt_v2/udt_v3, the debugger is fine with it.
-	codeview_symbol* sym = (codeview_symbol*) (udtSymbols + cbUdtSymbols);
 	sym->udt_v1.id = S_UDT_V1;
 	sym->udt_v1.type = translateType(type);
-	cstrcpy_v (true, (BYTE*)sym->udt_v1.p_name.name, name ? name : ""); // allow anonymous typedefs
-	sym->udt_v1.p_name.namelen = strlen(sym->udt_v1.p_name.name);
-	sym->udt_v1.len = sizeof(sym->udt_v1) + sym->udt_v1.p_name.namelen - 1 - 2;
-	cbUdtSymbols += sym->udt_v1.len + 2;
+	len = cstrcpy_v(false, (BYTE*)&sym->udt_v1.p_name, name ? name : ""); // allow anonymous typedefs
+	len += sizeof(sym->udt_v1) - sizeof(sym->udt_v1.p_name);
+	for (; len & (align - 1); len++)
+		((byte*)sym)[len] = 0xf4 - (len & 3);
+	sym->udt_v1.len = len - 2;
+	if (global)
+		cbUdtSymbols += len;
+	else
+		cbModSymbols += len;
 
+	return true;
+}
+
+void CV2PDB::checkModSymbolAlloc(int size, int add)
+{
+	if (cbModSymbols + size > allocModSymbols)
+	{
+		allocModSymbols += size + add;
+		modSymbols = (BYTE*)safe_realloc(modSymbols, allocModSymbols);
+	}
+}
+
+void CV2PDB::checkModFPODataAlloc(int size, int add)
+{
+	if (cbModFPOData + size > allocModFPOData)
+	{
+		allocModFPOData += size + add;
+		modFPOData = (BYTE*)safe_realloc(modFPOData, allocModFPOData);
+	}
+}
+
+void CV2PDB::checkModStringTableAlloc(int size, int add)
+{
+	if (cbModStringTable + size > allocModStringTable)
+	{
+		allocModStringTable += size + add;
+		modStringTable = (BYTE*)safe_realloc(modStringTable, allocModStringTable);
+	}
+}
+
+bool CV2PDB::addFPOData(mspdb::Mod* mod)
+{
+	if (cbModFPOData)
+		return writeSymbols(mod, (DWORD*)modFPOData, cbModFPOData, false, DEBUG_S_FRAMEDATA);
+	return true;
+}
+
+bool CV2PDB::addStringTable(mspdb::Mod* mod)
+{
+	if (cbModStringTable)
+		return writeSymbols(mod, (DWORD*)modStringTable, cbModStringTable, false, DEBUG_S_STRINGTABLE);
 	return true;
 }
 
 bool CV2PDB::addSymbols(mspdb::Mod* mod, BYTE* symbols, int cb, bool addGlobals)
 {
-	int prefix = 4; // mod == globmod ? 3 : 4;
-	int words = (cb + cbGlobalSymbols + cbStaticSymbols + cbUdtSymbols + 3) / 4 + prefix;
+	int words = (cb + cbGlobalSymbols + cbStaticSymbols + cbUdtSymbols + (sizeof(DWORD)-1)) / sizeof(DWORD);
 	DWORD* data = new DWORD[2 * words + 1000];
 
-	int databytes = copySymbols(symbols, cb, (BYTE*) (data + prefix), 0);
+	int databytes = copySymbols(symbols, cb, (BYTE*) data, 0);
 
-	bool rc = writeSymbols(mod, data, databytes, prefix, addGlobals);
+	bool rc = writeSymbols(mod, data, databytes, addGlobals);
 	delete [] data;
 	return rc;
 }
 
-bool CV2PDB::writeSymbols(mspdb::Mod* mod, DWORD* data, int databytes, int prefix, bool addGlobals)
+bool CV2PDB::writeSymbols(mspdb::Mod* mod, DWORD* data, int databytes, bool addGlobals, DWORD symtype)
 {
+	assert(!addGlobals || symtype == DEBUG_S_SYMBOLS);
+	if (symtype != DEBUG_S_SYMBOLS)
+		addGlobals = false;
 	if (addGlobals && staticSymbols)
-		databytes = copySymbols(staticSymbols, cbStaticSymbols, (BYTE*) (data + prefix), databytes);
+		databytes = copySymbols(staticSymbols, cbStaticSymbols, (BYTE*) data, databytes);
 	if (addGlobals && globalSymbols)
-		databytes = copySymbols(globalSymbols, cbGlobalSymbols, (BYTE*) (data + prefix), databytes);
+		databytes = copySymbols(globalSymbols, cbGlobalSymbols, (BYTE*) data, databytes);
 	if (addGlobals && udtSymbols)
-		databytes = copySymbols(udtSymbols, cbUdtSymbols, (BYTE*) (data + prefix), databytes);
+		databytes = copySymbols(udtSymbols, cbUdtSymbols, (BYTE*) data, databytes);
 
-	data[0] = 4;
-	data[1] = 0xf1;
-	data[2] = databytes + 4 * (prefix - 3);
-	if (prefix > 3)
-		data[3] = 1;
-	int rc = mod->AddSymbols((BYTE*) data, ((databytes + 3) / 4 + prefix) * 4);
+	const int datawords = (databytes + (sizeof(DWORD) - 1)) / sizeof(DWORD);
+	const int subsectoff = 1 + (sizeof(codeview_subsection_header) / sizeof(DWORD));
+	int dataoff = subsectoff + (symtype != DEBUG_S_STRINGTABLE ? 1 : 0);
+	DWORD* predata = new DWORD[dataoff + datawords];
+	predata[0] = CV_SIGNATURE_C13;
+	codeview_subsection_header* header = (codeview_subsection_header*)(predata + 1);
+	header->type = symtype;
+	header->cbLen = (symtype != DEBUG_S_STRINGTABLE ? sizeof(DWORD) : 0) + databytes;
+	if (symtype != DEBUG_S_STRINGTABLE)
+		predata[subsectoff] = CV_SIGNATURE_C7;	//HINT: If DEBUG_S_SYMBOLS is added with this signature,
+												//the next function call would skip the header check and
+												//expect to find symbols at offset 0x4. So DEBUG_S_SYMBOLS
+												//should always be the last one with a codeview_subsection_header.
+	memcpy(&predata[dataoff], data, databytes);
+	int rc = mod->AddSymbols((BYTE*) predata, (dataoff + datawords) * sizeof(DWORD));
+	delete[] predata;
 	if (rc <= 0)
 		return setError(
 		    mspdb::vsVersion == 10 ? "cannot add symbols to module, probably msobj100.dll missing"
@@ -3079,7 +3410,6 @@ bool CV2PDB::addSymbols(int iMod, BYTE* symbols, int cb, bool addGlobals)
 
 bool CV2PDB::addSymbols()
 {
-	int prefix = 4;
 	DWORD* data = 0;
 	int databytes = 0;
 	if (useGlobalMod)
@@ -3096,7 +3426,7 @@ bool CV2PDB::addSymbols()
 		{
 		case sstAlignSym:
 			if (useGlobalMod)
-				databytes = copySymbols(symbols + 4, entry->cb - 4, (BYTE*) (data + prefix), databytes);
+				databytes = copySymbols(symbols + 4, entry->cb - 4, (BYTE*) data, databytes);
 			else if (!addSymbols (entry->iMod, symbols + 4, entry->cb - 4, addGlobals))
 				return false;
 			addGlobals = false;
@@ -3108,10 +3438,10 @@ bool CV2PDB::addSymbols()
 		}
 	}
 	bool rc = true;
-	if (useGlobalMod)
-		rc = writeSymbols (globalMod(), data, databytes, prefix, true);
-
-	delete [] data;
+	if (useGlobalMod) {
+		rc = writeSymbols(globalMod(), data, databytes, true);
+		delete[] data;
+	}
 	return rc;
 }
 

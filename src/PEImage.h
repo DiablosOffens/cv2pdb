@@ -10,9 +10,77 @@
 #include "LastError.h"
 
 #include <windows.h>
+#include <unordered_map>
 
 struct OMFDirHeader;
 struct OMFDirEntry;
+
+struct ImportSymbol
+{
+	const char* libname;
+	const char* symname; // name of symbol if it is not an import by ordinal #
+	unsigned short ordinal;
+
+	// section+offset to the IAT entry
+	struct
+	{
+		int sec;
+		unsigned long off;
+	};
+};
+
+struct SymbolName
+{
+	const char* name;
+	size_t len;
+
+	template <size_t size>
+	SymbolName(const BYTE(&val)[size])
+		: name((const char*)val), len(strnlen((const char*)val, size))
+	{
+	}
+	SymbolName(const char* val)
+		: name(val), len(strlen(val))
+	{
+	}
+
+	bool HasPrefix() const { return name[0] == '_'; }
+
+	SymbolName WithoutPrefix() const
+	{
+		SymbolName result = *this;
+		result.name += 1;
+		result.len -= 1;
+		return result;
+	}
+};
+
+#ifndef _CONST_FUN
+#define _CONST_FUN constexpr
+#endif
+
+_STD_BEGIN
+template<>
+struct hash<SymbolName>
+{
+	size_t operator()(const SymbolName& _Keyval) const
+	{
+		return _Hash_seq((const unsigned char*)_Keyval.name, _Keyval.len);
+	}
+};
+template<>
+struct equal_to<SymbolName>
+{	// functor for operator==
+	typedef SymbolName first_argument_type;
+	typedef SymbolName second_argument_type;
+	typedef bool result_type;
+
+	_CONST_FUN bool operator()(const SymbolName& _Left, const SymbolName& _Right) const
+	{	// apply operator== to operands
+		return (_Left.len == _Right.len && strncmp(_Left.name, _Right.name, _Left.len) == 0);
+	}
+};
+_STD_END
 
 #define IMGHDR(x) (hdr32 ? hdr32->x : hdr64->x)
 
@@ -41,7 +109,7 @@ public:
 		return DPV<P>(cv_base + off, sizeof(P));
 	}
 
-	template<class P> P* RVA(unsigned long rva, int len)
+	template<class P> P* RVA(unsigned long rva, int len) const
 	{
 		IMAGE_DOS_HEADER *dos = DPV<IMAGE_DOS_HEADER> (0);
 		IMAGE_NT_HEADERS32* hdr = DPV<IMAGE_NT_HEADERS32> (dos->e_lfanew);
@@ -61,14 +129,16 @@ public:
 	bool loadObj(const TCHAR* iname);
 	bool save(const TCHAR* oname);
 
-	bool replaceDebugSection (const void* data, int datalen, bool initCV);
+	bool replaceDebugSection(const void* data, int datalen, bool initCV, bool simulate = false, int* nsecresult = 0);
 	bool initCVPtr(bool initDbgDir);
 	bool initDWARFPtr(bool initDbgDir);
     bool initDWARFObject();
     void initDWARFSegments();
-	bool relocateDebugLineInfo(unsigned int img_base);
+	void initSymbolsMap();
+	bool relocateDebugLineInfo(unsigned long long img_base);
 
 	bool hasDWARF() const { return debug_line != 0; }
+	bool hasGNUDebugLink() const { return gnu_debuglink != 0; }
 	bool isX64() const { return hdr64 != 0; }
 
 	int countCVEntries() const;
@@ -81,13 +151,19 @@ public:
 	static void free_aligned(void* p);
 
 	int countSections() const { return nsec; }
-	int findSection(unsigned int off) const;
+	int findSection(unsigned long long off) const;
 	int findSymbol(const char* name, unsigned long& off) const;
+	int findImportSymbol(const char * name, unsigned long& off) const;
 	const char* findSectionSymbolName(int s) const;
 	const IMAGE_SECTION_HEADER& getSection(int s) const { return sec[s]; }
 	unsigned long long getImageBase() const { return IMGHDR(OptionalHeader.ImageBase); }
     int getRelocationInLineSegment(unsigned int offset) const;
+	int getRelocationInCodeSegment(unsigned int offset) const;
     int getRelocationInSegment(int segment, unsigned int offset) const;
+	unsigned long long getSectionVMA(int s) const { return sec[s].VirtualAddress + getImageBase(); }
+	unsigned long long getSectionVMA(const char* secname) const;
+	bool getNextImportSymbol(ImportSymbol& sym);
+	bool hasSectionAtZeroVMA() const;
 
     int dumpDebugLineInfoCOFF();
     int dumpDebugLineInfoOMF();
@@ -104,14 +180,17 @@ private:
 	IMAGE_NT_HEADERS32* hdr32;
 	IMAGE_NT_HEADERS64* hdr64;
 	IMAGE_SECTION_HEADER* sec;
+	IMAGE_IMPORT_DESCRIPTOR* impDir;
 	IMAGE_DEBUG_DIRECTORY* dbgDir;
 	OMFDirHeader* dirHeader;
 	OMFDirEntry* dirEntry;
     int nsec;
     int nsym;
+	int nimp, iimp, ithunk;
     const char* symtable;
     const char* strtable;
     bool bigobj;
+	std::unordered_map<SymbolName, IMAGE_SYMBOL*> symbols_map;
 
 public:
 	//dwarf
@@ -125,6 +204,10 @@ public:
 	char* debug_str;
 	char* debug_loc;      unsigned long debug_loc_length;
 	char* debug_ranges;   unsigned long debug_ranges_length;
+	char* debug_macinfo;  unsigned long debug_macinfo_length;
+	char* debug_addr;	  unsigned long debug_addr_length;
+	char* eh_frame;		  unsigned long eh_frame_length;
+	char* gnu_debuglink;  unsigned long gnu_debuglink_length;
 	char* reloc;          unsigned long reloc_length;
 
 	int linesSegment;

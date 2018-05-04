@@ -18,6 +18,9 @@
 
 #include "symutil.h"
 
+#include "../libiberty/demangle.h"
+#undef PTR
+
 #ifdef _M_X64
 extern "C" void cvt80to64(void * in, long double * out);
 #endif
@@ -176,6 +179,12 @@ class Demangle
 public:
 	size_t ni;
 	string name;
+	bool cpp;
+
+	Demangle(bool _cpp = false)
+		: cpp(_cpp)
+	{
+	}
 	
 	static void error()
 	{
@@ -582,8 +591,23 @@ public:
 		return result;
 	}
 
+	string cpp_demangle(string _name, bool plainName = false)
+	{
+		string result = name = _name;
+		char* buf = cplus_demangle(_name.c_str(), plainName ? DMGL_TYPES : (DMGL_TYPES | DMGL_PARAMS | DMGL_ANSI | DMGL_RET_POSTFIX));
+		if (buf)
+		{
+			result = buf;
+			delete buf;
+		}
+		return result;
+	}
+
 	string demangle(string _name, bool plainName = false)
 	{
+		if (cpp)
+			return cpp_demangle(_name, plainName);
+
 		ni = 2;
 		name = _name;
 
@@ -627,7 +651,7 @@ void unittest()
 {
 	// debug(demangle) printf("demangle.demangle.unittest\n");
 
-	static string table[][2] = 
+	static string d_table[][2] = 
 	{
 		{ "_D6object14_moduleTlsCtorUZv15_moduleTlsCtor2MFAPS6object10ModuleInfoiZv", "void object._moduleTlsCtor._moduleTlsCtor2(struct object.ModuleInfo*[], int)"},
 		{ "_D7dparser3dmd8Template21TemplateTypeParameter13overloadMatchMFC7dparser3dmd8Template17TemplateParameterZi", "int dparser.dmd.Template.TemplateTypeParameter.overloadMatch(class dparser.dmd.Template.TemplateParameter)"},
@@ -647,10 +671,10 @@ void unittest()
 	};
 
 	Demangle d;
-	for(int i = 0; i < sizeof(table)/sizeof(table[0]); i++)
+	for(int i = 0; i < sizeof(d_table)/sizeof(d_table[0]); i++)
 	{
-		string r = d.demangle(table[i][0]);
-		assert(r == table[i][1]);
+		string r = d.demangle(d_table[i][0]);
+		assert(r == d_table[i][1]);
 		//	"table entry #" + toString(i) + ": '" + name[0] + "' demangles as '" + r + "' but is expected to be '" + name[1] + "'");
 	}
 
@@ -672,4 +696,70 @@ bool d_demangle(const char* name, char* demangled, int maxlen, bool plain)
 		return false;
 	strncpy(demangled, r.c_str(), maxlen);
 	return true;
+}
+
+bool cpp_demangle(const char* name, char* demangled, int maxlen, bool plain)
+{
+	Demangle d(true);
+	string nm(name, strlen(name));
+	string r = d.demangle(nm, plain);
+	if (r.length == 0)
+		return false;
+	strncpy(demangled, r.c_str(), maxlen);
+	return true;
+}
+
+bool cpp_ismangled_ctor_dtor_or_conversion(const char* name, bool& ctor, bool& dtor, bool& conversion)
+{
+	ctor = false;
+	dtor = false;
+	conversion = false;
+
+	void* comps = NULL;
+	demangle_component* dc = cplus_demangle_v3_components(name, 0, &comps);
+
+	bool ret = false;
+	while (dc != NULL)
+	{
+		switch (dc->type)
+		{
+			/* These cannot appear on a constructor or destructor.  */
+		case DEMANGLE_COMPONENT_RESTRICT_THIS:
+		case DEMANGLE_COMPONENT_VOLATILE_THIS:
+		case DEMANGLE_COMPONENT_CONST_THIS:
+		case DEMANGLE_COMPONENT_REFERENCE_THIS:
+		case DEMANGLE_COMPONENT_RVALUE_REFERENCE_THIS:
+		default:
+			dc = NULL;
+			break;
+		case DEMANGLE_COMPONENT_TYPED_NAME:
+		case DEMANGLE_COMPONENT_TEMPLATE:
+			dc = ((dc)->u.s_binary.left);
+			break;
+		case DEMANGLE_COMPONENT_QUAL_NAME:
+		case DEMANGLE_COMPONENT_LOCAL_NAME:
+			dc = ((dc)->u.s_binary.right);
+			break;
+		case DEMANGLE_COMPONENT_CTOR:
+			//*ctor_kind = dc->u.s_ctor.kind;
+			ctor = true;
+			ret = true;
+			dc = NULL;
+			break;
+		case DEMANGLE_COMPONENT_DTOR:
+			//*dtor_kind = dc->u.s_dtor.kind;
+			dtor = true;
+			ret = true;
+			dc = NULL;
+			break;
+		case DEMANGLE_COMPONENT_CONVERSION:
+			conversion = true;
+			ret = true;
+			dc = NULL;
+			break;
+		}
+	}
+	if (comps != NULL)
+		free(comps);
+	return ret;
 }
